@@ -9,13 +9,13 @@ export default class TestPlane {
 
   create() {
     // 1. Define Dimensions
-    const A = 16 // Width (x)
-    const B = 16 // Height/Depth (z)
+    const A = 32 // Width (x)
+    const B = 32 // Height/Depth (z)
 
     // Define the resolution (Grid of vertices)
     // 1x1 segment = 4 vertices (2 triangles)
-    const widthSegments = 64
-    const heightSegments = 64
+    const widthSegments = 128
+    const heightSegments = 128
 
     // 2. Create the Vertex Array
     // You need (segments + 1) points along each axis
@@ -34,7 +34,7 @@ export default class TestPlane {
         const x = (j / widthSegments) * A
 
         // Y is usually 0 for a flat plan
-        const y = this.perlinNoise.noise2D(z / 8, x / 8) * 2
+        const y = this.perlinNoise.noise2D(z / 8, x / 8) * 4
 
         // Push to array (x, y, z)
         vertices.push(x, y, z)
@@ -76,6 +76,7 @@ export default class TestPlane {
       side: THREE.DoubleSide,
       wireframe: true,
     })
+
     const plane = new THREE.Mesh(geometry, material)
 
     // 6. Add to Scene
