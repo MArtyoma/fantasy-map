@@ -1,5 +1,6 @@
 import '../App.css'
 import { Map } from '../map'
+import TestPlane from '../map/testplane'
 import { useEffect, useRef } from 'react'
 
 let ready = false
@@ -11,6 +12,8 @@ export default function App() {
     if (!ref.current || ready) return
     ready = true
     new Map(ref.current)
+    const plane = new TestPlane()
+    plane.create()
   }, [ref])
 
   return (
