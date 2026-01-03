@@ -2,10 +2,10 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 export class Map {
-  private scene: THREE.Scene
-  private camera: THREE.PerspectiveCamera
-  private renderer: THREE.WebGLRenderer
-  private controls: OrbitControls
+  public static scene: THREE.Scene
+  public static camera: THREE.PerspectiveCamera
+  public static renderer: THREE.WebGLRenderer
+  public static controls: OrbitControls
 
   private animationFrameId: number | null = null
 
@@ -14,36 +14,36 @@ export class Map {
   constructor(container: HTMLElement) {
     this.container = container
 
-    this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x202020)
+    Map.scene = new THREE.Scene()
+    Map.scene.background = new THREE.Color(0x202020)
 
-    this.camera = new THREE.PerspectiveCamera(
+    Map.camera = new THREE.PerspectiveCamera(
       75,
       this.container.clientWidth / this.container.clientHeight,
       0.1,
       1000
     )
-    this.camera.position.set(5, 5, 5)
-    this.camera.lookAt(0, 0, 0)
+    Map.camera.position.set(5, 5, 5)
+    Map.camera.lookAt(0, 0, 0)
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true })
-    this.renderer.setSize(
+    Map.renderer = new THREE.WebGLRenderer({ antialias: true })
+    Map.renderer.setSize(
       this.container.clientWidth,
       this.container.clientHeight
     )
-    this.renderer.setPixelRatio(window.devicePixelRatio)
+    Map.renderer.setPixelRatio(window.devicePixelRatio)
 
-    this.container.appendChild(this.renderer.domElement)
+    this.container.appendChild(Map.renderer.domElement)
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement)
+    Map.controls = new OrbitControls(Map.camera, Map.renderer.domElement)
 
-    this.controls.enableDamping = true
-    this.controls.dampingFactor = 0.05
-    this.controls.rotateSpeed = 0.5
-    this.controls.zoomSpeed = 0.5
-    this.controls.panSpeed = 0.5
-    this.controls.maxDistance = 50
-    this.controls.minDistance = 1
+    Map.controls.enableDamping = true
+    Map.controls.dampingFactor = 0.05
+    Map.controls.rotateSpeed = 0.5
+    Map.controls.zoomSpeed = 0.5
+    Map.controls.panSpeed = 0.5
+    Map.controls.maxDistance = 50
+    Map.controls.minDistance = 1
 
     this.addLighting()
 
@@ -60,14 +60,14 @@ export class Map {
    */
   private addLighting(): void {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5)
-    this.scene.add(ambientLight)
+    Map.scene.add(ambientLight)
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
     directionalLight.position.set(10, 10, 5)
-    this.scene.add(directionalLight)
+    Map.scene.add(directionalLight)
 
     const hemisphereLight = new THREE.HemisphereLight(0x4488aa, 0xcc8866, 0.3)
-    this.scene.add(hemisphereLight)
+    Map.scene.add(hemisphereLight)
   }
 
   /**
@@ -75,10 +75,10 @@ export class Map {
    */
   private addBasicGeometry(): void {
     const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x888888)
-    this.scene.add(gridHelper)
+    Map.scene.add(gridHelper)
 
     const axesHelper = new THREE.AxesHelper(5)
-    this.scene.add(axesHelper)
+    Map.scene.add(axesHelper)
   }
 
   /**
@@ -86,11 +86,11 @@ export class Map {
    */
   private setupResizeHandler(): void {
     const handleResize = () => {
-      this.camera.aspect =
+      Map.camera.aspect =
         this.container.clientWidth / this.container.clientHeight
-      this.camera.updateProjectionMatrix()
+      Map.camera.updateProjectionMatrix()
 
-      this.renderer.setSize(
+      Map.renderer.setSize(
         this.container.clientWidth,
         this.container.clientHeight
       )
@@ -112,9 +112,9 @@ export class Map {
   private animate(): void {
     this.animationFrameId = requestAnimationFrame(() => this.animate())
 
-    this.controls.update()
+    Map.controls.update()
 
-    this.renderer.render(this.scene, this.camera)
+    Map.renderer.render(Map.scene, Map.camera)
   }
 
   /**
@@ -122,7 +122,7 @@ export class Map {
    * @param object - Three.js object to add to the scene
    */
   public addToScene(object: THREE.Object3D): void {
-    this.scene.add(object)
+    Map.scene.add(object)
   }
 
   /**
@@ -130,7 +130,7 @@ export class Map {
    * @param object - Three.js object to remove from the scene
    */
   public removeFromScene(object: THREE.Object3D): void {
-    this.scene.remove(object)
+    Map.scene.remove(object)
   }
 
   /**
@@ -138,7 +138,7 @@ export class Map {
    * @returns The Three.js scene
    */
   public getScene(): THREE.Scene {
-    return this.scene
+    return Map.scene
   }
 
   /**
@@ -146,7 +146,7 @@ export class Map {
    * @returns The Three.js camera
    */
   public getCamera(): THREE.PerspectiveCamera {
-    return this.camera
+    return Map.camera
   }
 
   /**
@@ -154,7 +154,7 @@ export class Map {
    * @returns The Three.js renderer
    */
   public getRenderer(): THREE.WebGLRenderer {
-    return this.renderer
+    return Map.renderer
   }
 
   /**
@@ -162,7 +162,7 @@ export class Map {
    * @returns The OrbitControls
    */
   public getControls(): OrbitControls {
-    return this.controls
+    return Map.controls
   }
 
   /**
@@ -174,14 +174,14 @@ export class Map {
       cancelAnimationFrame(this.animationFrameId)
     }
 
-    this.controls.dispose()
+    Map.controls.dispose()
 
-    this.renderer.dispose()
+    Map.renderer.dispose()
 
     window.removeEventListener('resize', () => {})
 
-    if (this.renderer.domElement.parentNode === this.container) {
-      this.container.removeChild(this.renderer.domElement)
+    if (Map.renderer.domElement.parentNode === this.container) {
+      this.container.removeChild(Map.renderer.domElement)
     }
 
     if (!this.container.id && this.container.parentNode === document.body) {
@@ -193,10 +193,9 @@ export class Map {
    * Update scene dimensions manually (useful for container size changes)
    */
   public updateSize(): void {
-    this.camera.aspect =
-      this.container.clientWidth / this.container.clientHeight
-    this.camera.updateProjectionMatrix()
-    this.renderer.setSize(
+    Map.camera.aspect = this.container.clientWidth / this.container.clientHeight
+    Map.camera.updateProjectionMatrix()
+    Map.renderer.setSize(
       this.container.clientWidth,
       this.container.clientHeight
     )
