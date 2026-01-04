@@ -1,11 +1,17 @@
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { CameraController } from './camera-controller'
+import { TileManager } from './TileManager'
+
+export { MapTile, NeighborDirection } from './MapTile'
+export { TileManager } from './TileManager'
+export { CameraController } from './camera-controller'
 
 export class Map {
   public static scene: THREE.Scene
   public static camera: THREE.PerspectiveCamera
   public static renderer: THREE.WebGLRenderer
-  public static controls: OrbitControls
+  public static cameraController: CameraController
+  public static tileManager: TileManager
 
   private animationFrameId: number | null = null
 
@@ -15,7 +21,7 @@ export class Map {
     this.container = container
 
     Map.scene = new THREE.Scene()
-    Map.scene.background = new THREE.Color(0x202020)
+    Map.scene.background = new THREE.Color(0x87ceeb) // Sky blue background
 
     Map.camera = new THREE.PerspectiveCamera(
       75,
@@ -23,7 +29,8 @@ export class Map {
       0.1,
       1000
     )
-    Map.camera.position.set(5, 5, 5)
+    // Position camera above and looking down
+    Map.camera.position.set(0, 25, 0)
     Map.camera.lookAt(0, 0, 0)
 
     Map.renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -35,15 +42,31 @@ export class Map {
 
     this.container.appendChild(Map.renderer.domElement)
 
-    Map.controls = new OrbitControls(Map.camera, Map.renderer.domElement)
+    // Use custom camera controller for WASD + mouse + scroll control
+    Map.cameraController = new CameraController(
+      Map.camera,
+      Map.renderer.domElement
+    )
 
-    Map.controls.enableDamping = true
-    Map.controls.dampingFactor = 0.05
-    Map.controls.rotateSpeed = 0.5
-    Map.controls.zoomSpeed = 0.5
-    Map.controls.panSpeed = 0.5
-    Map.controls.maxDistance = 50
-    Map.controls.minDistance = 1
+    // Initialize tile manager
+    Map.tileManager = new TileManager(Map.scene, {
+      tileConfig: {
+        size: 32,
+        segments: 64,
+        noiseScale: 8,
+        heightScale: 4,
+        seed: 12345,
+      },
+      loadDistance: 4,
+      unloadDistance: 6,
+      maxTilesPerFrame: 2,
+    })
+
+    // Initial tile load
+    Map.tileManager.forceLoadAll(
+      Map.camera.position.x,
+      Map.camera.position.z
+    )
 
     this.addLighting()
 
@@ -111,7 +134,10 @@ export class Map {
   private animate(): void {
     this.animationFrameId = requestAnimationFrame(() => this.animate())
 
-    Map.controls.update()
+    Map.cameraController.update()
+
+    // Update tile manager with camera position
+    Map.tileManager.update(Map.camera.position.x, Map.camera.position.z)
 
     Map.renderer.render(Map.scene, Map.camera)
   }
@@ -157,11 +183,11 @@ export class Map {
   }
 
   /**
-   * Get the controls instance
-   * @returns The OrbitControls
+   * Get the camera controller instance
+   * @returns The CameraController
    */
-  public getControls(): OrbitControls {
-    return Map.controls
+  public getCameraController(): CameraController {
+    return Map.cameraController
   }
 
   /**
@@ -173,7 +199,8 @@ export class Map {
       cancelAnimationFrame(this.animationFrameId)
     }
 
-    Map.controls.dispose()
+    Map.cameraController.dispose()
+    Map.tileManager.dispose()
 
     Map.renderer.dispose()
 
