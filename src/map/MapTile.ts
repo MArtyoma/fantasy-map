@@ -118,7 +118,7 @@ function getSharedMaterial(): THREE.MeshStandardMaterial {
     sharedMaterial = new THREE.MeshStandardMaterial({
       color: 0x4a7c4e,
       side: THREE.DoubleSide,
-      wireframe: true,
+      wireframe: false,
       flatShading: false,
     })
   }
@@ -380,64 +380,55 @@ export class MapTile {
     )
   }
 
-  // Get height from neighbor at world position
-  private getNeighborHeightAtWorld(
-    worldX: number,
-    worldZ: number
-  ): number | null {
-    // Check each loaded neighbor to find one that contains this point
-    for (let dir = 0; dir < 8; dir++) {
-      const neighbor = this.neighbors[dir]
-      if (!neighbor || !neighbor.heightMap) continue
-
-      // Check if this world position is within neighbor's virtual area
-      const localX = worldX - neighbor.virtualWorldX
-      const localZ = worldZ - neighbor.virtualWorldZ
-      const virtualSize = neighbor.virtualSize
-
-      if (
-        localX >= 0 &&
-        localX <= virtualSize &&
-        localZ >= 0 &&
-        localZ <= virtualSize
-      ) {
-        const segmentSize = neighbor.config.size / neighbor.config.segments
-        const gridX = localX / segmentSize
-        const gridZ = localZ / segmentSize
-
-        const x0 = Math.floor(gridX)
-        const z0 = Math.floor(gridZ)
-        const x1 = Math.min(x0 + 1, neighbor.virtualSegments)
-        const z1 = Math.min(z0 + 1, neighbor.virtualSegments)
-
-        if (
-          x0 < 0 ||
-          x1 >= neighbor.virtualVertexCount ||
-          z0 < 0 ||
-          z1 >= neighbor.virtualVertexCount
-        ) {
-          continue
-        }
-
-        const fx = gridX - x0
-        const fz = gridZ - z0
-
-        const vvc = neighbor.virtualVertexCount
-        const h00 = neighbor.heightMap[z0 * vvc + x0]
-        const h10 = neighbor.heightMap[z0 * vvc + x1]
-        const h01 = neighbor.heightMap[z1 * vvc + x0]
-        const h11 = neighbor.heightMap[z1 * vvc + x1]
-
-        const h0 = h00 * (1 - fx) + h10 * fx
-        const h1 = h01 * (1 - fx) + h11 * fx
-
-        return h0 * (1 - fz) + h1 * fz
-      }
-    }
-    return null
+  // Get the original (unblended) heightmap for consistent blending
+  private getOriginalHeightMap(): Float32Array | null {
+    // Try eroded cache first, then raw cache
+    return (
+      erodedHeightMapCache.get(this.key) || heightMapCache.get(this.key) || null
+    )
   }
 
-  // Blend heightmap with neighbors at borders
+  // Get height from neighbor's ORIGINAL heightmap at exact grid position
+  // Returns null if neighbor doesn't have this point
+  private getNeighborOriginalHeight(
+    neighbor: MapTile,
+    visibleI: number,
+    visibleJ: number
+  ): number | null {
+    const neighborOriginal = neighbor.getOriginalHeightMap()
+    if (!neighborOriginal) return null
+
+    const { segments, overlapSegments } = this.config
+
+    // Calculate where this vertex is in neighbor's grid
+    // Our visible (i,j) -> world position -> neighbor's virtual (ni, nj)
+
+    // Direction from us to neighbor
+    const dx = neighbor.tileX - this.tileX
+    const dz = neighbor.tileZ - this.tileZ
+
+    // Calculate corresponding position in neighbor's virtual grid
+    // If neighbor is to the East (dx=1), our j=segments corresponds to their j=0
+    // Our visible vertex (i,j) in neighbor's virtual coordinates:
+    let neighborVirtualJ = visibleJ - dx * segments + overlapSegments
+    let neighborVirtualI = visibleI - dz * segments + overlapSegments
+
+    const vvc = neighbor.virtualVertexCount
+
+    // Check bounds
+    if (
+      neighborVirtualI < 0 ||
+      neighborVirtualI >= vvc ||
+      neighborVirtualJ < 0 ||
+      neighborVirtualJ >= vvc
+    ) {
+      return null
+    }
+
+    return neighborOriginal[neighborVirtualI * vvc + neighborVirtualJ]
+  }
+
+  // Blend heightmap with neighbors at borders - EXACT vertex matching
   public blendWithNeighbors(): boolean {
     if (!this.heightMap || !this.isLoaded) return false
     if (this.blendVersion === this.lastBlendVersion) return false
@@ -449,10 +440,14 @@ export class MapTile {
       return false
     }
 
+    // Get our original (unblended) heightmap for consistent results
+    const myOriginal = this.getOriginalHeightMap()
+    if (!myOriginal) return false
+
     // Check if we have any loaded neighbors to blend with
     let hasLoadedNeighbor = false
     for (const neighbor of this.neighbors) {
-      if (neighbor && neighbor.heightMap) {
+      if (neighbor && neighbor.getOriginalHeightMap()) {
         hasLoadedNeighbor = true
         break
       }
@@ -462,62 +457,171 @@ export class MapTile {
       return false
     }
 
-    // Create blended heightmap
+    // Create blended heightmap from original
     const virtualVertexCount = this.virtualVertexCount
-    const blendedMap = new Float32Array(this.heightMap)
+    const blendedMap = new Float32Array(myOriginal)
 
-    const segmentSize = this.config.size / segments
-    const blendDistance = overlapSegments // How many segments to blend over
+    const blendDistance = overlapSegments
 
-    // Process each vertex in the visible area's border region
-    for (let i = 0; i < segments + 1; i++) {
-      for (let j = 0; j < segments + 1; j++) {
+    // Process each vertex in the visible area
+    for (let i = 0; i <= segments; i++) {
+      for (let j = 0; j <= segments; j++) {
         // Calculate distance to each edge (in segments)
         const distToNorth = i
         const distToSouth = segments - i
         const distToWest = j
         const distToEast = segments - j
 
-        // Only blend vertices near edges
-        const minDist = Math.min(
-          distToNorth,
-          distToSouth,
-          distToWest,
-          distToEast
-        )
-        if (minDist >= blendDistance) continue
+        // Determine which edges this vertex is near
+        const nearNorth = distToNorth < blendDistance
+        const nearSouth = distToSouth < blendDistance
+        const nearWest = distToWest < blendDistance
+        const nearEast = distToEast < blendDistance
 
-        // World position of this vertex
-        const worldX = this.worldX + j * segmentSize
-        const worldZ = this.worldZ + i * segmentSize
-
-        // Get height from neighbors
-        const neighborHeight = this.getNeighborHeightAtWorld(worldX, worldZ)
-        if (neighborHeight === null) continue
+        if (!nearNorth && !nearSouth && !nearWest && !nearEast) continue
 
         // Virtual heightmap index
         const virtualI = i + overlapSegments
         const virtualJ = j + overlapSegments
         const idx = virtualI * virtualVertexCount + virtualJ
 
-        const myHeight = blendedMap[idx]
+        // Get my original height
+        const myHeight = myOriginal[idx]
 
-        // Calculate blend weight based on distance to edge
-        // At edge (minDist=0): weight = 0.5 (50% blend)
-        // At blendDistance: weight = 1.0 (no blend)
-        const t = minDist / blendDistance
-        const blendWeight = smoothstep(0, 1, t)
+        // Collect heights from all relevant neighbors
+        const heights: number[] = [myHeight]
+        const weights: number[] = [1.0]
 
-        // Blend: at edge we mix 50/50, further in we use more of our own height
-        const edgeBlend = 0.5 // How much neighbor influence at the very edge
-        const neighborInfluence = (1 - blendWeight) * edgeBlend
-        const blendedHeight =
-          myHeight * (1 - neighborInfluence) +
-          neighborHeight * neighborInfluence
+        // Check each neighbor direction
+        // North neighbor (dz = -1)
+        if (nearNorth) {
+          const neighbor = this.neighbors[NeighborDirection.North]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight = 1 - distToNorth / blendDistance
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
 
-        blendedMap[idx] = blendedHeight
+        // South neighbor (dz = +1)
+        if (nearSouth) {
+          const neighbor = this.neighbors[NeighborDirection.South]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight = 1 - distToSouth / blendDistance
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        // West neighbor (dx = -1)
+        if (nearWest) {
+          const neighbor = this.neighbors[NeighborDirection.West]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight = 1 - distToWest / blendDistance
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        // East neighbor (dx = +1)
+        if (nearEast) {
+          const neighbor = this.neighbors[NeighborDirection.East]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight = 1 - distToEast / blendDistance
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        // Corner neighbors for corner vertices
+        if (nearNorth && nearWest) {
+          const neighbor = this.neighbors[NeighborDirection.NorthWest]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight =
+                (1 - distToNorth / blendDistance) *
+                (1 - distToWest / blendDistance)
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        if (nearNorth && nearEast) {
+          const neighbor = this.neighbors[NeighborDirection.NorthEast]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight =
+                (1 - distToNorth / blendDistance) *
+                (1 - distToEast / blendDistance)
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        if (nearSouth && nearWest) {
+          const neighbor = this.neighbors[NeighborDirection.SouthWest]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight =
+                (1 - distToSouth / blendDistance) *
+                (1 - distToWest / blendDistance)
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        if (nearSouth && nearEast) {
+          const neighbor = this.neighbors[NeighborDirection.SouthEast]
+          if (neighbor) {
+            const h = this.getNeighborOriginalHeight(neighbor, i, j)
+            if (h !== null) {
+              const weight =
+                (1 - distToSouth / blendDistance) *
+                (1 - distToEast / blendDistance)
+              heights.push(h)
+              weights.push(weight)
+            }
+          }
+        }
+
+        // Calculate weighted average
+        if (heights.length > 1) {
+          let totalWeight = 0
+          let weightedSum = 0
+
+          for (let k = 0; k < heights.length; k++) {
+            // Apply smoothstep to weights for smoother blending
+            const smoothWeight = smoothstep(0, 1, weights[k])
+            weightedSum += heights[k] * smoothWeight
+            totalWeight += smoothWeight
+          }
+
+          blendedMap[idx] = weightedSum / totalWeight
+        }
       }
     }
+
+    // CRITICAL: Ensure exact vertex matching on borders
+    // For vertices exactly on the border, use deterministic averaging
+    this.ensureExactBorderMatch(blendedMap, myOriginal)
 
     // Cache the blended heightmap
     blendedHeightMapCache.set(this.key, blendedMap)
@@ -527,6 +631,212 @@ export class MapTile {
     this.lastBlendVersion = this.blendVersion
 
     return true
+  }
+
+  // Ensure vertices exactly on tile borders match with neighbors
+  private ensureExactBorderMatch(
+    blendedMap: Float32Array,
+    myOriginal: Float32Array
+  ): void {
+    const { segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+
+    // Process each border
+    // North border (i = 0)
+    const northNeighbor = this.neighbors[NeighborDirection.North]
+    if (northNeighbor) {
+      const neighborOriginal = northNeighbor.getOriginalHeightMap()
+      if (neighborOriginal) {
+        for (let j = 0; j <= segments; j++) {
+          const myIdx =
+            (0 + overlapSegments) * virtualVertexCount + (j + overlapSegments)
+          const neighborVirtualI = segments + overlapSegments
+          const neighborVirtualJ = j + overlapSegments
+          const neighborIdx =
+            neighborVirtualI * virtualVertexCount + neighborVirtualJ
+
+          // Average the two heights for exact match
+          const avgHeight =
+            (myOriginal[myIdx] + neighborOriginal[neighborIdx]) / 2
+          blendedMap[myIdx] = avgHeight
+        }
+      }
+    }
+
+    // South border (i = segments)
+    const southNeighbor = this.neighbors[NeighborDirection.South]
+    if (southNeighbor) {
+      const neighborOriginal = southNeighbor.getOriginalHeightMap()
+      if (neighborOriginal) {
+        for (let j = 0; j <= segments; j++) {
+          const myIdx =
+            (segments + overlapSegments) * virtualVertexCount +
+            (j + overlapSegments)
+          const neighborVirtualI = 0 + overlapSegments
+          const neighborVirtualJ = j + overlapSegments
+          const neighborIdx =
+            neighborVirtualI * virtualVertexCount + neighborVirtualJ
+
+          const avgHeight =
+            (myOriginal[myIdx] + neighborOriginal[neighborIdx]) / 2
+          blendedMap[myIdx] = avgHeight
+        }
+      }
+    }
+
+    // West border (j = 0)
+    const westNeighbor = this.neighbors[NeighborDirection.West]
+    if (westNeighbor) {
+      const neighborOriginal = westNeighbor.getOriginalHeightMap()
+      if (neighborOriginal) {
+        for (let i = 0; i <= segments; i++) {
+          const myIdx =
+            (i + overlapSegments) * virtualVertexCount + (0 + overlapSegments)
+          const neighborVirtualI = i + overlapSegments
+          const neighborVirtualJ = segments + overlapSegments
+          const neighborIdx =
+            neighborVirtualI * virtualVertexCount + neighborVirtualJ
+
+          const avgHeight =
+            (myOriginal[myIdx] + neighborOriginal[neighborIdx]) / 2
+          blendedMap[myIdx] = avgHeight
+        }
+      }
+    }
+
+    // East border (j = segments)
+    const eastNeighbor = this.neighbors[NeighborDirection.East]
+    if (eastNeighbor) {
+      const neighborOriginal = eastNeighbor.getOriginalHeightMap()
+      if (neighborOriginal) {
+        for (let i = 0; i <= segments; i++) {
+          const myIdx =
+            (i + overlapSegments) * virtualVertexCount +
+            (segments + overlapSegments)
+          const neighborVirtualI = i + overlapSegments
+          const neighborVirtualJ = 0 + overlapSegments
+          const neighborIdx =
+            neighborVirtualI * virtualVertexCount + neighborVirtualJ
+
+          const avgHeight =
+            (myOriginal[myIdx] + neighborOriginal[neighborIdx]) / 2
+          blendedMap[myIdx] = avgHeight
+        }
+      }
+    }
+
+    // Corner vertices need special handling (average of up to 4 tiles)
+    this.ensureCornerMatch(blendedMap, myOriginal, 0, 0) // NW corner
+    this.ensureCornerMatch(blendedMap, myOriginal, 0, segments) // NE corner
+    this.ensureCornerMatch(blendedMap, myOriginal, segments, 0) // SW corner
+    this.ensureCornerMatch(blendedMap, myOriginal, segments, segments) // SE corner
+  }
+
+  // Ensure corner vertex matches with all adjacent tiles
+  private ensureCornerMatch(
+    blendedMap: Float32Array,
+    myOriginal: Float32Array,
+    i: number,
+    j: number
+  ): void {
+    const { segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+
+    const myIdx =
+      (i + overlapSegments) * virtualVertexCount + (j + overlapSegments)
+
+    const heights: number[] = [myOriginal[myIdx]]
+
+    // Determine which corner and get relevant neighbors
+    const isNorth = i === 0
+    const isSouth = i === segments
+    const isWest = j === 0
+    const isEast = j === segments
+
+    // Cardinal neighbors
+    if (isNorth) {
+      const neighbor = this.neighbors[NeighborDirection.North]
+      if (neighbor) {
+        const neighborOriginal = neighbor.getOriginalHeightMap()
+        if (neighborOriginal) {
+          const ni = segments + overlapSegments
+          const nj = j + overlapSegments
+          heights.push(neighborOriginal[ni * virtualVertexCount + nj])
+        }
+      }
+    }
+    if (isSouth) {
+      const neighbor = this.neighbors[NeighborDirection.South]
+      if (neighbor) {
+        const neighborOriginal = neighbor.getOriginalHeightMap()
+        if (neighborOriginal) {
+          const ni = 0 + overlapSegments
+          const nj = j + overlapSegments
+          heights.push(neighborOriginal[ni * virtualVertexCount + nj])
+        }
+      }
+    }
+    if (isWest) {
+      const neighbor = this.neighbors[NeighborDirection.West]
+      if (neighbor) {
+        const neighborOriginal = neighbor.getOriginalHeightMap()
+        if (neighborOriginal) {
+          const ni = i + overlapSegments
+          const nj = segments + overlapSegments
+          heights.push(neighborOriginal[ni * virtualVertexCount + nj])
+        }
+      }
+    }
+    if (isEast) {
+      const neighbor = this.neighbors[NeighborDirection.East]
+      if (neighbor) {
+        const neighborOriginal = neighbor.getOriginalHeightMap()
+        if (neighborOriginal) {
+          const ni = i + overlapSegments
+          const nj = 0 + overlapSegments
+          heights.push(neighborOriginal[ni * virtualVertexCount + nj])
+        }
+      }
+    }
+
+    // Diagonal neighbor for corners
+    let diagonalDir: NeighborDirection | null = null
+    let diagI = 0
+    let diagJ = 0
+
+    if (isNorth && isWest) {
+      diagonalDir = NeighborDirection.NorthWest
+      diagI = segments + overlapSegments
+      diagJ = segments + overlapSegments
+    } else if (isNorth && isEast) {
+      diagonalDir = NeighborDirection.NorthEast
+      diagI = segments + overlapSegments
+      diagJ = 0 + overlapSegments
+    } else if (isSouth && isWest) {
+      diagonalDir = NeighborDirection.SouthWest
+      diagI = 0 + overlapSegments
+      diagJ = segments + overlapSegments
+    } else if (isSouth && isEast) {
+      diagonalDir = NeighborDirection.SouthEast
+      diagI = 0 + overlapSegments
+      diagJ = 0 + overlapSegments
+    }
+
+    if (diagonalDir !== null) {
+      const neighbor = this.neighbors[diagonalDir]
+      if (neighbor) {
+        const neighborOriginal = neighbor.getOriginalHeightMap()
+        if (neighborOriginal) {
+          heights.push(neighborOriginal[diagI * virtualVertexCount + diagJ])
+        }
+      }
+    }
+
+    // Average all heights for exact corner match
+    if (heights.length > 1) {
+      const avgHeight = heights.reduce((a, b) => a + b, 0) / heights.length
+      blendedMap[myIdx] = avgHeight
+    }
   }
 
   // Update geometry after blending

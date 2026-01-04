@@ -75,7 +75,7 @@ export class Map {
           gravity: 4,
         },
         overlapSegments: 16, // Overlap with neighbors (for seamless erosion)
-        showOverlap: false, // Set to true to visualize overlap areas
+        showOverlap: true, // Set to true to visualize overlap areas
       },
       loadDistance: 4,
       unloadDistance: 6,
