@@ -11,6 +11,7 @@ export {
 export type { TileConfig, ErosionConfig } from './MapTile'
 export { TileManager } from './TileManager'
 export { CameraController } from './camera-controller'
+export type { CameraSettings } from './camera-controller'
 
 export class Map {
   public static scene: THREE.Scene
@@ -51,7 +52,19 @@ export class Map {
     // Use custom camera controller for WASD + mouse + scroll control
     Map.cameraController = new CameraController(
       Map.camera,
-      Map.renderer.domElement
+      Map.renderer.domElement,
+      {
+        moveSpeed: 10,
+        dragSpeed: 0.01,
+        zoomSpeed: 2,
+        rotateSpeed: 0.3,
+        minZoom: 5,
+        maxZoom: 100,
+        minPitch: 15, // Minimum angle from horizontal
+        maxPitch: 90, // Maximum angle (looking straight down)
+        initialPitch: 45, // Start at 45 degrees
+        initialYaw: 0, // Start facing north
+      }
     )
 
     // Initialize tile manager

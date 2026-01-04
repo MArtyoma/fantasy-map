@@ -1,35 +1,100 @@
 import * as THREE from 'three'
 
+export interface CameraSettings {
+  moveSpeed: number
+  dragSpeed: number
+  zoomSpeed: number
+  rotateSpeed: number
+  minZoom: number
+  maxZoom: number
+  minPitch: number // Minimum pitch angle in degrees (0 = looking down)
+  maxPitch: number // Maximum pitch angle in degrees (90 = looking horizontal)
+  initialPitch: number // Initial pitch angle in degrees
+  initialYaw: number // Initial yaw angle in degrees
+}
+
+const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
+  moveSpeed: 10,
+  dragSpeed: 0.01,
+  zoomSpeed: 2,
+  rotateSpeed: 0.3,
+  minZoom: 2,
+  maxZoom: 50,
+  minPitch: 10, // Minimum 10 degrees from horizontal
+  maxPitch: 90, // Maximum 90 degrees (looking straight down)
+  initialPitch: 60, // Start at 60 degrees
+  initialYaw: 0, // Start facing north
+}
+
 export class CameraController {
   private camera: THREE.PerspectiveCamera
   private domElement: HTMLElement
 
   // Movement state
-  private keys = { w: false, a: false, s: false, d: false }
+  private keys = { w: false, a: false, s: false, d: false, q: false, e: false }
 
   // Mouse state
   private isDragging = false
+  private isRotating = false
   private previousMousePosition = { x: 0, y: 0 }
 
   // Camera settings
-  private moveSpeed = 10
-  private dragSpeed = 0.01
-  private zoomSpeed = 2
-  private minZoom = 2
-  private maxZoom = 50
+  private settings: CameraSettings
 
-  // Target position for smooth camera movement
+  // Target values for smooth interpolation
   private targetPosition: THREE.Vector3
   private targetZoom: number
+  private targetPitch: number // Angle in degrees (0-90, 90 = looking down)
+  private targetYaw: number // Angle in degrees (0-360)
+
+  // Current values
+  private currentPitch: number
+  private currentYaw: number
+  private currentZoom: number
+
+  // The point the camera is looking at (on the ground)
+  private lookAtPoint: THREE.Vector3
+
+  // Track if camera needs update
+  private needsUpdate = true
+
+  // Last applied values (to detect actual changes)
+  private lastAppliedX = 0
+  private lastAppliedZ = 0
+  private lastAppliedPitch = 0
+  private lastAppliedYaw = 0
+  private lastAppliedZoom = 0
 
   // Clock for delta time
   private clock = new THREE.Clock()
 
-  constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
+  constructor(
+    camera: THREE.PerspectiveCamera,
+    domElement: HTMLElement,
+    settings: Partial<CameraSettings> = {}
+  ) {
     this.camera = camera
     this.domElement = domElement
-    this.targetPosition = camera.position.clone()
+    this.settings = { ...DEFAULT_CAMERA_SETTINGS, ...settings }
+
+    // Initialize angles
+    this.targetPitch = this.settings.initialPitch
+    this.targetYaw = this.settings.initialYaw
+    this.currentPitch = this.targetPitch
+    this.currentYaw = this.targetYaw
+
+    // Initialize positions
+    this.lookAtPoint = new THREE.Vector3(
+      camera.position.x,
+      0,
+      camera.position.z
+    )
+    this.targetPosition = this.lookAtPoint.clone()
     this.targetZoom = camera.position.y
+    this.currentZoom = this.targetZoom
+
+    // Apply initial camera position based on angles
+    this.updateCameraFromAngles()
 
     this.setupEventListeners()
   }
@@ -69,89 +134,277 @@ export class CameraController {
   }
 
   private onMouseDown(event: MouseEvent): void {
-    // Left mouse button (0) or middle mouse button (1)
-    if (event.button === 0 || event.button === 1) {
+    if (event.button === 0) {
+      // Left mouse button - pan
+      this.isDragging = true
+      this.previousMousePosition = { x: event.clientX, y: event.clientY }
+    } else if (event.button === 2) {
+      // Right mouse button - rotate
+      this.isRotating = true
+      this.previousMousePosition = { x: event.clientX, y: event.clientY }
+    } else if (event.button === 1) {
+      // Middle mouse button - pan
       this.isDragging = true
       this.previousMousePosition = { x: event.clientX, y: event.clientY }
     }
   }
 
   private onMouseMove(event: MouseEvent): void {
-    if (!this.isDragging) return
-
     const deltaX = event.clientX - this.previousMousePosition.x
     const deltaY = event.clientY - this.previousMousePosition.y
 
-    // Calculate movement based on camera height (zoom level)
-    const zoomFactor = this.camera.position.y * this.dragSpeed
+    if (this.isDragging) {
+      // Pan camera - move in the direction the camera is facing
+      const zoomFactor = this.camera.position.y * this.settings.dragSpeed
 
-    // Move camera in opposite direction of mouse movement
-    this.targetPosition.x -= deltaX * zoomFactor
-    this.targetPosition.z -= deltaY * zoomFactor
+      // Calculate movement direction based on yaw
+      const yawRad = (this.currentYaw * Math.PI) / 180
+      const cosYaw = Math.cos(yawRad)
+      const sinYaw = Math.sin(yawRad)
+
+      // Move relative to camera orientation
+      const moveX = -deltaX * cosYaw - deltaY * sinYaw
+      const moveZ = deltaX * sinYaw - deltaY * cosYaw
+
+      this.targetPosition.x += moveX * zoomFactor
+      this.targetPosition.z += moveZ * zoomFactor
+    }
+
+    if (this.isRotating) {
+      // Rotate camera
+      this.targetYaw -= deltaX * this.settings.rotateSpeed
+      this.targetPitch += deltaY * this.settings.rotateSpeed
+
+      // Clamp pitch
+      this.targetPitch = THREE.MathUtils.clamp(
+        this.targetPitch,
+        this.settings.minPitch,
+        this.settings.maxPitch
+      )
+
+      // Normalize yaw to 0-360
+      this.targetYaw = ((this.targetYaw % 360) + 360) % 360
+    }
 
     this.previousMousePosition = { x: event.clientX, y: event.clientY }
   }
 
-  private onMouseUp(): void {
-    this.isDragging = false
+  private onMouseUp(event: MouseEvent): void {
+    if (event.button === 0 || event.button === 1) {
+      this.isDragging = false
+    }
+    if (event.button === 2) {
+      this.isRotating = false
+    }
   }
 
   private onWheel(event: WheelEvent): void {
     event.preventDefault()
 
     // Calculate new zoom level
-    const zoomDelta = event.deltaY * 0.01 * this.zoomSpeed
+    const zoomDelta = event.deltaY * 0.01 * this.settings.zoomSpeed
     this.targetZoom = THREE.MathUtils.clamp(
       this.targetZoom + zoomDelta,
-      this.minZoom,
-      this.maxZoom
+      this.settings.minZoom,
+      this.settings.maxZoom
     )
   }
 
   public update(): void {
     const delta = this.clock.getDelta()
 
-    // Handle WASD movement
-    const moveAmount = this.moveSpeed * delta * (this.camera.position.y / 10)
+    // Check if any input is active
+    const hasInput =
+      this.keys.w ||
+      this.keys.s ||
+      this.keys.a ||
+      this.keys.d ||
+      this.keys.q ||
+      this.keys.e ||
+      this.isDragging ||
+      this.isRotating
 
-    if (this.keys.w) {
-      this.targetPosition.z -= moveAmount
-    }
-    if (this.keys.s) {
-      this.targetPosition.z += moveAmount
-    }
-    if (this.keys.a) {
-      this.targetPosition.x -= moveAmount
-    }
-    if (this.keys.d) {
-      this.targetPosition.x += moveAmount
+    // Handle WASD movement relative to camera orientation
+    if (hasInput) {
+      const moveAmount =
+        this.settings.moveSpeed * delta * (this.currentZoom / 10)
+
+      // Calculate movement direction based on yaw
+      const yawRad = (this.currentYaw * Math.PI) / 180
+      const forwardX = Math.sin(yawRad)
+      const forwardZ = Math.cos(yawRad)
+      const rightX = Math.cos(yawRad)
+      const rightZ = -Math.sin(yawRad)
+
+      if (this.keys.w) {
+        this.targetPosition.x -= forwardX * moveAmount
+        this.targetPosition.z -= forwardZ * moveAmount
+        this.needsUpdate = true
+      }
+      if (this.keys.s) {
+        this.targetPosition.x += forwardX * moveAmount
+        this.targetPosition.z += forwardZ * moveAmount
+        this.needsUpdate = true
+      }
+      if (this.keys.a) {
+        this.targetPosition.x -= rightX * moveAmount
+        this.targetPosition.z -= rightZ * moveAmount
+        this.needsUpdate = true
+      }
+      if (this.keys.d) {
+        this.targetPosition.x += rightX * moveAmount
+        this.targetPosition.z += rightZ * moveAmount
+        this.needsUpdate = true
+      }
+
+      // Q/E for rotation
+      if (this.keys.q) {
+        this.targetYaw += this.settings.rotateSpeed * 2
+        this.needsUpdate = true
+      }
+      if (this.keys.e) {
+        this.targetYaw -= this.settings.rotateSpeed * 2
+        this.needsUpdate = true
+      }
+
+      // Normalize yaw
+      this.targetYaw = ((this.targetYaw % 360) + 360) % 360
     }
 
-    // Smoothly interpolate camera position
+    // Check if we need to interpolate
+    const positionThreshold = 0.0001
+    const angleThreshold = 0.001
+    const zoomThreshold = 0.001
+
+    const posXDiff = Math.abs(this.lookAtPoint.x - this.targetPosition.x)
+    const posZDiff = Math.abs(this.lookAtPoint.z - this.targetPosition.z)
+    const pitchDiff = Math.abs(this.currentPitch - this.targetPitch)
+    const zoomDiff = Math.abs(this.currentZoom - this.targetZoom)
+
+    // Calculate yaw difference with wrap-around
+    let yawDiff = this.targetYaw - this.currentYaw
+    if (yawDiff > 180) yawDiff -= 360
+    if (yawDiff < -180) yawDiff += 360
+    const absYawDiff = Math.abs(yawDiff)
+
+    // Check if any value needs interpolation
+    const needsInterpolation =
+      posXDiff > positionThreshold ||
+      posZDiff > positionThreshold ||
+      pitchDiff > angleThreshold ||
+      absYawDiff > angleThreshold ||
+      zoomDiff > zoomThreshold
+
+    if (!needsInterpolation && !this.needsUpdate) {
+      // Nothing to update, camera is stable
+      return
+    }
+
+    // Smoothly interpolate values
     const lerpFactor = 1 - Math.pow(0.001, delta)
 
-    this.camera.position.x = THREE.MathUtils.lerp(
-      this.camera.position.x,
-      this.targetPosition.x,
-      lerpFactor
-    )
-    this.camera.position.z = THREE.MathUtils.lerp(
-      this.camera.position.z,
-      this.targetPosition.z,
-      lerpFactor
-    )
-    this.camera.position.y = THREE.MathUtils.lerp(
-      this.camera.position.y,
-      this.targetZoom,
-      lerpFactor
+    // Interpolate position
+    if (posXDiff > positionThreshold) {
+      this.lookAtPoint.x = THREE.MathUtils.lerp(
+        this.lookAtPoint.x,
+        this.targetPosition.x,
+        lerpFactor
+      )
+    } else {
+      this.lookAtPoint.x = this.targetPosition.x
+    }
+
+    if (posZDiff > positionThreshold) {
+      this.lookAtPoint.z = THREE.MathUtils.lerp(
+        this.lookAtPoint.z,
+        this.targetPosition.z,
+        lerpFactor
+      )
+    } else {
+      this.lookAtPoint.z = this.targetPosition.z
+    }
+
+    // Interpolate pitch
+    if (pitchDiff > angleThreshold) {
+      this.currentPitch = THREE.MathUtils.lerp(
+        this.currentPitch,
+        this.targetPitch,
+        lerpFactor
+      )
+    } else {
+      this.currentPitch = this.targetPitch
+    }
+
+    // Interpolate yaw
+    if (absYawDiff > angleThreshold) {
+      this.currentYaw += yawDiff * lerpFactor
+      this.currentYaw = ((this.currentYaw % 360) + 360) % 360
+    } else {
+      this.currentYaw = this.targetYaw
+    }
+
+    // Interpolate zoom
+    if (zoomDiff > zoomThreshold) {
+      this.currentZoom = THREE.MathUtils.lerp(
+        this.currentZoom,
+        this.targetZoom,
+        lerpFactor
+      )
+    } else {
+      this.currentZoom = this.targetZoom
+    }
+
+    // Check if camera position actually changed
+    const epsilon = 0.00001
+    const posChanged =
+      Math.abs(this.lookAtPoint.x - this.lastAppliedX) > epsilon ||
+      Math.abs(this.lookAtPoint.z - this.lastAppliedZ) > epsilon ||
+      Math.abs(this.currentPitch - this.lastAppliedPitch) > epsilon ||
+      Math.abs(this.currentYaw - this.lastAppliedYaw) > epsilon ||
+      Math.abs(this.currentZoom - this.lastAppliedZoom) > epsilon
+
+    if (posChanged) {
+      // Update camera position based on angles and zoom
+      this.updateCameraPosition(this.currentZoom)
+
+      // Store last applied values
+      this.lastAppliedX = this.lookAtPoint.x
+      this.lastAppliedZ = this.lookAtPoint.z
+      this.lastAppliedPitch = this.currentPitch
+      this.lastAppliedYaw = this.currentYaw
+      this.lastAppliedZoom = this.currentZoom
+    }
+
+    // Reset needsUpdate flag
+    this.needsUpdate = false
+  }
+
+  private updateCameraPosition(distance: number): void {
+    // Convert angles to radians
+    const pitchRad = (this.currentPitch * Math.PI) / 180
+    const yawRad = (this.currentYaw * Math.PI) / 180
+
+    // Calculate camera offset from look-at point
+    // Pitch: 90 = looking straight down, 0 = looking horizontal
+    const horizontalDist = distance * Math.cos(pitchRad)
+    const verticalDist = distance * Math.sin(pitchRad)
+
+    const offsetX = horizontalDist * Math.sin(yawRad)
+    const offsetZ = horizontalDist * Math.cos(yawRad)
+
+    // Set camera position
+    this.camera.position.set(
+      this.lookAtPoint.x + offsetX,
+      verticalDist,
+      this.lookAtPoint.z + offsetZ
     )
 
-    // Update target position to match actual camera position
-    this.targetPosition.x = this.camera.position.x
-    this.targetPosition.z = this.camera.position.z
+    // Look at the target point
+    this.camera.lookAt(this.lookAtPoint.x, 0, this.lookAtPoint.z)
+  }
 
-    // Make camera look at the point below it
-    this.camera.lookAt(this.camera.position.x, 0, this.camera.position.z)
+  private updateCameraFromAngles(): void {
+    this.updateCameraPosition(this.targetZoom)
   }
 
   public dispose(): void {
@@ -170,21 +423,67 @@ export class CameraController {
     this.domElement.removeEventListener('wheel', this.onWheel.bind(this))
   }
 
+  // Getters
+  public getPitch(): number {
+    return this.currentPitch
+  }
+
+  public getYaw(): number {
+    return this.currentYaw
+  }
+
+  public getZoom(): number {
+    return this.targetZoom
+  }
+
+  public getLookAtPoint(): THREE.Vector3 {
+    return this.lookAtPoint.clone()
+  }
+
   // Setters for customization
   public setMoveSpeed(speed: number): void {
-    this.moveSpeed = speed
+    this.settings.moveSpeed = speed
   }
 
   public setDragSpeed(speed: number): void {
-    this.dragSpeed = speed
+    this.settings.dragSpeed = speed
   }
 
   public setZoomSpeed(speed: number): void {
-    this.zoomSpeed = speed
+    this.settings.zoomSpeed = speed
+  }
+
+  public setRotateSpeed(speed: number): void {
+    this.settings.rotateSpeed = speed
   }
 
   public setZoomLimits(min: number, max: number): void {
-    this.minZoom = min
-    this.maxZoom = max
+    this.settings.minZoom = min
+    this.settings.maxZoom = max
+  }
+
+  public setPitchLimits(min: number, max: number): void {
+    this.settings.minPitch = min
+    this.settings.maxPitch = max
+    // Clamp current pitch to new limits
+    this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, min, max)
+  }
+
+  // Set camera angles directly
+  public setPitch(degrees: number): void {
+    this.targetPitch = THREE.MathUtils.clamp(
+      degrees,
+      this.settings.minPitch,
+      this.settings.maxPitch
+    )
+  }
+
+  public setYaw(degrees: number): void {
+    this.targetYaw = ((degrees % 360) + 360) % 360
+  }
+
+  // Move camera to look at specific point
+  public lookAt(x: number, z: number): void {
+    this.targetPosition.set(x, 0, z)
   }
 }
