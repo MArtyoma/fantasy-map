@@ -60,11 +60,11 @@ export class Map {
         size: 32,
         segments: 64,
         noiseScale: 8,
-        heightScale: 4,
+        heightScale: 8,
         seed: 12345,
         erosion: {
           enabled: true,
-          iterations: 3000,
+          iterations: 50_000,
           inertia: 0.05,
           capacity: 4,
           deposition: 0.1,

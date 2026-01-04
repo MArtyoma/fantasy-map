@@ -1,3 +1,7 @@
+/**
+ * Optimized Hydraulic Erosion Simulation
+ * Based on particle-based erosion with radius brushes
+ */
 export class Erosion {
   // Parameters
   inertia = 0.05
@@ -8,170 +12,371 @@ export class Erosion {
   gravity = 4
   evaporation = 0.02
   radius = 3
+  maxDropletLifetime = 30
 
+  // Precomputed erosion brush data
+  private brushIndices: Int32Array[] = []
+  private brushWeights: Float32Array[] = []
+  private currentRadius = -1
+  private currentWidth = -1
+
+  /**
+   * Main erosion function - optimized for performance
+   */
   erode(
     map: Float32Array,
     width: number,
     height: number,
     iterations: number = 50000
-  ) {
-    const mapSize = width * height
+  ): void {
+    // Precompute brush if needed
+    if (this.currentRadius !== this.radius || this.currentWidth !== width) {
+      this.precomputeBrushes(width, height)
+    }
 
-    for (let i = 0; i < iterations; i++) {
-      // Spawn New Droplet
-      let posX = Math.random() * (width - 1)
-      let posY = Math.random() * (height - 1)
+    // Cache parameters locally for faster access
+    const inertia = this.inertia
+    const minSlope = this.minSlope
+    const capacityFactor = this.capacity
+    const depositionRate = this.deposition
+    const erosionRate = this.erosion
+    const gravityFactor = this.gravity
+    const evaporationRate = this.evaporation
+    const maxLifetime = this.maxDropletLifetime
+    const brushIndices = this.brushIndices
+    const brushWeights = this.brushWeights
+
+    // Bounds for droplet spawning (avoid edges)
+    const spawnWidth = width - 2
+    const spawnHeight = height - 2
+
+    for (let iter = 0; iter < iterations; iter++) {
+      // Spawn droplet at random position
+      let posX = Math.random() * spawnWidth + 1
+      let posY = Math.random() * spawnHeight + 1
       let dirX = 0
       let dirY = 0
       let speed = 1
       let water = 1
       let sediment = 0
 
-      for (let step = 0; step < 30; step++) {
-        const nodeX = Math.floor(posX)
-        const nodeY = Math.floor(posY)
+      for (let lifetime = 0; lifetime < maxLifetime; lifetime++) {
+        const nodeX = posX | 0 // Fast floor
+        const nodeY = posY | 0
+        const dropletIndex = nodeY * width + nodeX
+
+        // Cell offset for bilinear interpolation
         const cellOffsetX = posX - nodeX
         const cellOffsetY = posY - nodeY
 
-        // Get height and gradient
-        const heightData = this.calculateHeightAndGradient(
-          map,
-          width,
-          height,
-          posX,
-          posY
-        )
+        // Calculate height and gradient (inlined for performance)
+        const idx = dropletIndex
+        const h00 = map[idx]
+        const h10 = map[idx + 1]
+        const h01 = map[idx + width]
+        const h11 = map[idx + width + 1]
 
-        // Calculate new direction
-        dirX = dirX * this.inertia - heightData.gradientX * (1 - this.inertia)
-        dirY = dirY * this.inertia - heightData.gradientY * (1 - this.inertia)
+        // Bilinear interpolation
+        const oneMinusX = 1 - cellOffsetX
+        const oneMinusY = 1 - cellOffsetY
 
-        // Normalize direction
-        const len = Math.sqrt(dirX * dirX + dirY * dirY)
-        if (len !== 0) {
-          dirX /= len
-          dirY /= len
+        const currentHeight =
+          h00 * oneMinusX * oneMinusY +
+          h10 * cellOffsetX * oneMinusY +
+          h01 * oneMinusX * cellOffsetY +
+          h11 * cellOffsetX * cellOffsetY
+
+        // Gradient calculation
+        const gradientX = (h10 - h00) * oneMinusY + (h11 - h01) * cellOffsetY
+        const gradientY = (h01 - h00) * oneMinusX + (h11 - h10) * cellOffsetX
+
+        // Update direction with inertia
+        dirX = dirX * inertia - gradientX * (1 - inertia)
+        dirY = dirY * inertia - gradientY * (1 - inertia)
+
+        // Normalize direction (with fast inverse sqrt approximation)
+        const lenSq = dirX * dirX + dirY * dirY
+        if (lenSq > 0.0001) {
+          const invLen = 1 / Math.sqrt(lenSq)
+          dirX *= invLen
+          dirY *= invLen
+        } else {
+          // Random direction if stuck
+          const angle = Math.random() * 6.283185307
+          dirX = Math.cos(angle)
+          dirY = Math.sin(angle)
+        }
+
+        // Move droplet
+        posX += dirX
+        posY += dirY
+
+        // Check bounds
+        if (posX < 1 || posX >= width - 2 || posY < 1 || posY >= height - 2) {
+          break
+        }
+
+        // Calculate new height (inlined)
+        const newNodeX = posX | 0
+        const newNodeY = posY | 0
+        const newIdx = newNodeY * width + newNodeX
+        const newOffsetX = posX - newNodeX
+        const newOffsetY = posY - newNodeY
+        const newOneMinusX = 1 - newOffsetX
+        const newOneMinusY = 1 - newOffsetY
+
+        const newHeight =
+          map[newIdx] * newOneMinusX * newOneMinusY +
+          map[newIdx + 1] * newOffsetX * newOneMinusY +
+          map[newIdx + width] * newOneMinusX * newOffsetY +
+          map[newIdx + width + 1] * newOffsetX * newOffsetY
+
+        const heightDiff = newHeight - currentHeight
+
+        // Calculate sediment capacity
+        const sedimentCapacity =
+          Math.max(-heightDiff, minSlope) * speed * water * capacityFactor
+
+        if (sediment > sedimentCapacity || heightDiff > 0) {
+          // Deposit sediment
+          const depositAmount =
+            heightDiff > 0
+              ? Math.min(heightDiff, sediment)
+              : (sediment - sedimentCapacity) * depositionRate
+
+          sediment -= depositAmount
+
+          // Bilinear deposit (inlined)
+          map[idx] += depositAmount * oneMinusX * oneMinusY
+          map[idx + 1] += depositAmount * cellOffsetX * oneMinusY
+          map[idx + width] += depositAmount * oneMinusX * cellOffsetY
+          map[idx + width + 1] += depositAmount * cellOffsetX * cellOffsetY
+        } else {
+          // Erode terrain using brush
+          const erodeAmount = Math.min(
+            (sedimentCapacity - sediment) * erosionRate,
+            -heightDiff
+          )
+
+          // Use precomputed brush for smooth erosion
+          const indices = brushIndices[dropletIndex]
+          const weights = brushWeights[dropletIndex]
+
+          if (indices && weights) {
+            const numBrushPoints = indices.length
+            for (let i = 0; i < numBrushPoints; i++) {
+              const brushIdx = indices[i]
+              const weighedErodeAmount = erodeAmount * weights[i]
+              const deltaSediment =
+                map[brushIdx] < weighedErodeAmount
+                  ? map[brushIdx]
+                  : weighedErodeAmount
+              map[brushIdx] -= deltaSediment
+              sediment += deltaSediment
+            }
+          } else {
+            // Fallback to simple erosion if brush not available
+            sediment += erodeAmount
+            map[idx] -= erodeAmount * oneMinusX * oneMinusY
+            map[idx + 1] -= erodeAmount * cellOffsetX * oneMinusY
+            map[idx + width] -= erodeAmount * oneMinusX * cellOffsetY
+            map[idx + width + 1] -= erodeAmount * cellOffsetX * cellOffsetY
+          }
+        }
+
+        // Update speed and water
+        speed = Math.sqrt(Math.max(0, speed * speed + heightDiff * gravityFactor))
+        water *= 1 - evaporationRate
+      }
+    }
+  }
+
+  /**
+   * Precompute erosion brushes for each map position
+   * This creates a circular brush with smooth falloff
+   */
+  private precomputeBrushes(width: number, height: number): void {
+    this.currentRadius = this.radius
+    this.currentWidth = width
+
+    const radius = this.radius
+    const radiusSq = radius * radius
+    const mapSize = width * height
+
+    this.brushIndices = new Array(mapSize)
+    this.brushWeights = new Array(mapSize)
+
+    // Precompute weight sum for normalization
+    const weightTemplate: number[] = []
+    const offsetTemplate: [number, number][] = []
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const distSq = dx * dx + dy * dy
+        if (distSq <= radiusSq) {
+          const dist = Math.sqrt(distSq)
+          const weight = Math.max(0, radius - dist)
+          if (weight > 0) {
+            offsetTemplate.push([dx, dy])
+            weightTemplate.push(weight)
+          }
+        }
+      }
+    }
+
+    // Normalize weights
+    const weightSum = weightTemplate.reduce((a, b) => a + b, 0)
+    const normalizedWeights = weightTemplate.map((w) => w / weightSum)
+
+    // Create brushes for each valid position
+    for (let y = radius; y < height - radius; y++) {
+      for (let x = radius; x < width - radius; x++) {
+        const centerIdx = y * width + x
+        const indices: number[] = []
+        const weights: number[] = []
+
+        for (let i = 0; i < offsetTemplate.length; i++) {
+          const [dx, dy] = offsetTemplate[i]
+          const brushIdx = (y + dy) * width + (x + dx)
+          indices.push(brushIdx)
+          weights.push(normalizedWeights[i])
+        }
+
+        this.brushIndices[centerIdx] = new Int32Array(indices)
+        this.brushWeights[centerIdx] = new Float32Array(weights)
+      }
+    }
+  }
+
+  /**
+   * Fast erosion without radius brush (for very large maps)
+   */
+  erodeFast(
+    map: Float32Array,
+    width: number,
+    height: number,
+    iterations: number = 50000
+  ): void {
+    const inertia = this.inertia
+    const minSlope = this.minSlope
+    const capacityFactor = this.capacity
+    const depositionRate = this.deposition
+    const erosionRate = this.erosion
+    const gravityFactor = this.gravity
+    const evaporationRate = this.evaporation
+    const maxLifetime = this.maxDropletLifetime
+
+    const spawnWidth = width - 2
+    const spawnHeight = height - 2
+
+    for (let iter = 0; iter < iterations; iter++) {
+      let posX = Math.random() * spawnWidth + 1
+      let posY = Math.random() * spawnHeight + 1
+      let dirX = 0
+      let dirY = 0
+      let speed = 1
+      let water = 1
+      let sediment = 0
+
+      for (let lifetime = 0; lifetime < maxLifetime; lifetime++) {
+        const nodeX = posX | 0
+        const nodeY = posY | 0
+        const idx = nodeY * width + nodeX
+
+        const cellOffsetX = posX - nodeX
+        const cellOffsetY = posY - nodeY
+        const oneMinusX = 1 - cellOffsetX
+        const oneMinusY = 1 - cellOffsetY
+
+        // Get heights
+        const h00 = map[idx]
+        const h10 = map[idx + 1]
+        const h01 = map[idx + width]
+        const h11 = map[idx + width + 1]
+
+        // Current height
+        const currentHeight =
+          h00 * oneMinusX * oneMinusY +
+          h10 * cellOffsetX * oneMinusY +
+          h01 * oneMinusX * cellOffsetY +
+          h11 * cellOffsetX * cellOffsetY
+
+        // Gradient
+        const gradientX = (h10 - h00) * oneMinusY + (h11 - h01) * cellOffsetY
+        const gradientY = (h01 - h00) * oneMinusX + (h11 - h10) * cellOffsetX
+
+        // Update direction
+        dirX = dirX * inertia - gradientX * (1 - inertia)
+        dirY = dirY * inertia - gradientY * (1 - inertia)
+
+        // Normalize
+        const lenSq = dirX * dirX + dirY * dirY
+        if (lenSq > 0.0001) {
+          const invLen = 1 / Math.sqrt(lenSq)
+          dirX *= invLen
+          dirY *= invLen
         }
 
         posX += dirX
         posY += dirY
 
-        // Stop if off map
-        if (posX < 0 || posX >= width - 1 || posY < 0 || posY >= height - 1) {
+        if (posX < 1 || posX >= width - 2 || posY < 1 || posY >= height - 2) {
           break
         }
 
-        // Calculate new height
-        const newHeightData = this.calculateHeightAndGradient(
-          map,
-          width,
-          height,
-          posX,
-          posY
-        )
-        const diff = newHeightData.height - heightData.height
+        // New height
+        const newNodeX = posX | 0
+        const newNodeY = posY | 0
+        const newIdx = newNodeY * width + newNodeX
+        const newOffsetX = posX - newNodeX
+        const newOffsetY = posY - newNodeY
 
-        // Sediment Capacity
-        const sedimentCapacity = Math.max(
-          -diff * speed * water * this.capacity,
-          this.minSlope
-        )
+        const newHeight =
+          map[newIdx] * (1 - newOffsetX) * (1 - newOffsetY) +
+          map[newIdx + 1] * newOffsetX * (1 - newOffsetY) +
+          map[newIdx + width] * (1 - newOffsetX) * newOffsetY +
+          map[newIdx + width + 1] * newOffsetX * newOffsetY
 
-        if (sediment > sedimentCapacity || diff > 0) {
-          // Deposit
-          const amount =
-            diff > 0
-              ? Math.min(diff, sediment)
-              : (sediment - sedimentCapacity) * this.deposition
-          sediment -= amount
+        const heightDiff = newHeight - currentHeight
+        const sedimentCapacity =
+          Math.max(-heightDiff, minSlope) * speed * water * capacityFactor
 
-          // Add to height
-          this.deposit(
-            map,
-            width,
-            height,
-            nodeX,
-            nodeY,
-            cellOffsetX,
-            cellOffsetY,
-            amount
-          )
+        if (sediment > sedimentCapacity || heightDiff > 0) {
+          const depositAmount =
+            heightDiff > 0
+              ? Math.min(heightDiff, sediment)
+              : (sediment - sedimentCapacity) * depositionRate
+
+          sediment -= depositAmount
+          map[idx] += depositAmount * oneMinusX * oneMinusY
+          map[idx + 1] += depositAmount * cellOffsetX * oneMinusY
+          map[idx + width] += depositAmount * oneMinusX * cellOffsetY
+          map[idx + width + 1] += depositAmount * cellOffsetX * cellOffsetY
         } else {
-          // Erode
-          const amount = Math.min(
-            (sedimentCapacity - sediment) * this.erosion,
-            -diff
+          const erodeAmount = Math.min(
+            (sedimentCapacity - sediment) * erosionRate,
+            -heightDiff
           )
-          sediment += amount
-
-          // Remove from height
-          this.deposit(
-            map,
-            width,
-            height,
-            nodeX,
-            nodeY,
-            cellOffsetX,
-            cellOffsetY,
-            -amount
-          )
+          sediment += erodeAmount
+          map[idx] -= erodeAmount * oneMinusX * oneMinusY
+          map[idx + 1] -= erodeAmount * cellOffsetX * oneMinusY
+          map[idx + width] -= erodeAmount * oneMinusX * cellOffsetY
+          map[idx + width + 1] -= erodeAmount * cellOffsetX * cellOffsetY
         }
 
-        speed = Math.sqrt(Math.max(0, speed * speed - diff * this.gravity))
-        water *= 1 - this.evaporation
+        speed = Math.sqrt(Math.max(0, speed * speed + heightDiff * gravityFactor))
+        water *= 1 - evaporationRate
       }
     }
   }
 
-  calculateHeightAndGradient(
-    map: Float32Array,
-    mapWidth: number,
-    mapHeight: number,
-    posX: number,
-    posY: number
-  ) {
-    const coordX = Math.floor(posX)
-    const coordY = Math.floor(posY)
-    const x = posX - coordX
-    const y = posY - coordY
-
-    const idx = coordY * mapWidth + coordX
-
-    // Heights of the four corners
-    const h00 = map[idx]
-    const h10 = map[idx + 1]
-    const h01 = map[idx + mapWidth]
-    const h11 = map[idx + mapWidth + 1]
-
-    // Bilinear interpolation for gradient
-    const gradientX = (h10 - h00) * (1 - y) + (h11 - h01) * y
-    const gradientY = (h01 - h00) * (1 - x) + (h11 - h10) * x
-
-    // Bilinear interpolation for height
-    const height =
-      h00 * (1 - x) * (1 - y) +
-      h10 * x * (1 - y) +
-      h01 * (1 - x) * y +
-      h11 * x * y
-
-    return { height, gradientX, gradientY }
-  }
-
-  deposit(
-    map: Float32Array,
-    mapWidth: number,
-    mapHeight: number,
-    x: number,
-    y: number,
-    offsetX: number,
-    offsetY: number,
-    amount: number
-  ) {
-    // Simple bilinear deposition
-    const idx = y * mapWidth + x
-    map[idx] += amount * (1 - offsetX) * (1 - offsetY)
-    map[idx + 1] += amount * offsetX * (1 - offsetY)
-    map[idx + mapWidth] += amount * (1 - offsetX) * offsetY
-    map[idx + mapWidth + 1] += amount * offsetX * offsetY
+  /**
+   * Reset precomputed brushes (call when changing radius)
+   */
+  resetBrushes(): void {
+    this.brushIndices = []
+    this.brushWeights = []
+    this.currentRadius = -1
+    this.currentWidth = -1
   }
 }
