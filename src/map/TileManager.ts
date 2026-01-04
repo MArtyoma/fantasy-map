@@ -7,6 +7,7 @@ export interface TileManagerConfig {
   loadDistance: number // Distance in tiles to load
   unloadDistance: number // Distance in tiles to unload (should be > loadDistance)
   maxTilesPerFrame: number // Max tiles to load/unload per frame
+  maxBlendsPerFrame: number // Max tiles to blend per frame
 }
 
 const DEFAULT_MANAGER_CONFIG: TileManagerConfig = {
@@ -14,6 +15,7 @@ const DEFAULT_MANAGER_CONFIG: TileManagerConfig = {
   loadDistance: 3,
   unloadDistance: 5,
   maxTilesPerFrame: 2,
+  maxBlendsPerFrame: 2,
 }
 
 export class TileManager {
@@ -29,6 +31,9 @@ export class TileManager {
   // Pending operations (for frame budget)
   private pendingLoads: MapTile[] = []
   private pendingUnloads: MapTile[] = []
+
+  // Pending blend operations (for smooth borders)
+  private pendingBlends = new Set<string>()
 
   // Camera position tracking
   private lastCameraTileX = Infinity
@@ -176,7 +181,7 @@ export class TileManager {
 
   // Process pending load/unload operations within frame budget
   private processPendingOperations(): void {
-    const { maxTilesPerFrame } = this.config
+    const { maxTilesPerFrame, maxBlendsPerFrame } = this.config
     let operations = 0
 
     // Process unloads first (free memory)
@@ -192,6 +197,42 @@ export class TileManager {
       this.loadTile(tile)
       operations++
     }
+
+    // Process blending operations
+    this.processBlendingQueue(maxBlendsPerFrame)
+  }
+
+  // Process the blending queue
+  private processBlendingQueue(maxBlends: number): void {
+    let blendCount = 0
+
+    // Convert to array for iteration (we'll modify the set)
+    const keysToProcess = Array.from(this.pendingBlends)
+
+    for (const key of keysToProcess) {
+      if (blendCount >= maxBlends) break
+
+      const tile = this.tiles.get(key)
+      if (!tile || !tile.loaded) {
+        this.pendingBlends.delete(key)
+        continue
+      }
+
+      // Check if tile still needs blending
+      if (!tile.requiresBlending) {
+        this.pendingBlends.delete(key)
+        continue
+      }
+
+      // Perform blending
+      const didBlend = tile.blendWithNeighbors()
+      if (didBlend) {
+        tile.updateGeometryAfterBlend()
+        blendCount++
+      }
+
+      this.pendingBlends.delete(key)
+    }
   }
 
   // Load a tile
@@ -201,6 +242,24 @@ export class TileManager {
     tile.load(this.scene)
     this.loadedTiles.add(tile.key)
     this.loadedCount++
+
+    // Queue this tile and its neighbors for blending
+    this.queueTileForBlending(tile)
+  }
+
+  // Queue a tile and its neighbors for blending
+  private queueTileForBlending(tile: MapTile): void {
+    // Queue this tile
+    this.pendingBlends.add(tile.key)
+
+    // Queue all loaded neighbors (they need to blend with this new tile)
+    for (let dir = 0; dir < 8; dir++) {
+      const neighbor = tile.getNeighbor(dir as NeighborDirection)
+      if (neighbor && neighbor.loaded) {
+        neighbor.markNeedsBlending()
+        this.pendingBlends.add(neighbor.key)
+      }
+    }
   }
 
   // Unload a tile
@@ -228,8 +287,27 @@ export class TileManager {
       }
     }
 
+    // Force blend all loaded tiles immediately
+    this.forceBlendAll()
+
     this.lastCameraTileX = cameraTileX
     this.lastCameraTileZ = cameraTileZ
+  }
+
+  // Force blend all tiles that need blending (blocking)
+  private forceBlendAll(): void {
+    // Multiple passes to ensure all neighbors are considered
+    for (let pass = 0; pass < 2; pass++) {
+      for (const tile of this.tiles.values()) {
+        if (tile.loaded && tile.requiresBlending) {
+          const didBlend = tile.blendWithNeighbors()
+          if (didBlend) {
+            tile.updateGeometryAfterBlend()
+          }
+        }
+      }
+    }
+    this.pendingBlends.clear()
   }
 
   // Get tile at world position
@@ -251,6 +329,7 @@ export class TileManager {
     totalTiles: number
     pendingLoads: number
     pendingUnloads: number
+    pendingBlends: number
     cacheStats: ReturnType<typeof MapTile.getCacheStats>
   } {
     return {
@@ -258,6 +337,7 @@ export class TileManager {
       totalTiles: this.tiles.size,
       pendingLoads: this.pendingLoads.length,
       pendingUnloads: this.pendingUnloads.length,
+      pendingBlends: this.pendingBlends.size,
       cacheStats: MapTile.getCacheStats(),
     }
   }
@@ -282,6 +362,7 @@ export class TileManager {
     this.loadedTiles.clear()
     this.pendingLoads = []
     this.pendingUnloads = []
+    this.pendingBlends.clear()
 
     MapTile.clearCaches()
 

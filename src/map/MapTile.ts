@@ -87,8 +87,17 @@ const heightMapCache = new Map<string, Float32Array>()
 // Cache for eroded heightmaps (separate from raw heightmaps)
 const erodedHeightMapCache = new Map<string, Float32Array>()
 
+// Cache for blended heightmaps (after neighbor blending)
+const blendedHeightMapCache = new Map<string, Float32Array>()
+
 // Shared geometry cache (key includes showOverlap state)
 const geometryCache = new Map<string, THREE.BufferGeometry>()
+
+// Smoothstep function for smooth blending
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)))
+  return t * t * (3 - 2 * t)
+}
 
 // Shared erosion instance
 let sharedErosion: Erosion | null = null
@@ -109,7 +118,7 @@ function getSharedMaterial(): THREE.MeshStandardMaterial {
     sharedMaterial = new THREE.MeshStandardMaterial({
       color: 0x4a7c4e,
       side: THREE.DoubleSide,
-      wireframe: false,
+      wireframe: true,
       flatShading: false,
     })
   }
@@ -165,6 +174,9 @@ export class MapTile {
   // State
   private isLoaded = false
   private isGenerating = false
+  private needsBlending = true
+  private blendVersion = 0 // Incremented when neighbors change
+  private lastBlendVersion = -1 // Last version we blended at
 
   // Perlin noise generator (shared across tiles with same seed)
   private static noiseGenerators = new Map<number, PerlinNoise>()
@@ -244,7 +256,13 @@ export class MapTile {
 
   // Set neighbor
   public setNeighbor(direction: NeighborDirection, tile: MapTile | null): void {
-    this.neighbors[direction] = tile
+    const oldNeighbor = this.neighbors[direction]
+    if (oldNeighbor !== tile) {
+      this.neighbors[direction] = tile
+      // Mark that we need to re-blend when neighbor changes
+      this.blendVersion++
+      this.needsBlending = true
+    }
   }
 
   // Get neighbor
@@ -351,6 +369,203 @@ export class MapTile {
 
     // Apply erosion if enabled
     return this.applyErosion(rawHeightMap)
+  }
+
+  // Check if this tile needs blending
+  public get requiresBlending(): boolean {
+    return (
+      this.needsBlending &&
+      this.isLoaded &&
+      this.blendVersion !== this.lastBlendVersion
+    )
+  }
+
+  // Get height from neighbor at world position
+  private getNeighborHeightAtWorld(
+    worldX: number,
+    worldZ: number
+  ): number | null {
+    // Check each loaded neighbor to find one that contains this point
+    for (let dir = 0; dir < 8; dir++) {
+      const neighbor = this.neighbors[dir]
+      if (!neighbor || !neighbor.heightMap) continue
+
+      // Check if this world position is within neighbor's virtual area
+      const localX = worldX - neighbor.virtualWorldX
+      const localZ = worldZ - neighbor.virtualWorldZ
+      const virtualSize = neighbor.virtualSize
+
+      if (
+        localX >= 0 &&
+        localX <= virtualSize &&
+        localZ >= 0 &&
+        localZ <= virtualSize
+      ) {
+        const segmentSize = neighbor.config.size / neighbor.config.segments
+        const gridX = localX / segmentSize
+        const gridZ = localZ / segmentSize
+
+        const x0 = Math.floor(gridX)
+        const z0 = Math.floor(gridZ)
+        const x1 = Math.min(x0 + 1, neighbor.virtualSegments)
+        const z1 = Math.min(z0 + 1, neighbor.virtualSegments)
+
+        if (
+          x0 < 0 ||
+          x1 >= neighbor.virtualVertexCount ||
+          z0 < 0 ||
+          z1 >= neighbor.virtualVertexCount
+        ) {
+          continue
+        }
+
+        const fx = gridX - x0
+        const fz = gridZ - z0
+
+        const vvc = neighbor.virtualVertexCount
+        const h00 = neighbor.heightMap[z0 * vvc + x0]
+        const h10 = neighbor.heightMap[z0 * vvc + x1]
+        const h01 = neighbor.heightMap[z1 * vvc + x0]
+        const h11 = neighbor.heightMap[z1 * vvc + x1]
+
+        const h0 = h00 * (1 - fx) + h10 * fx
+        const h1 = h01 * (1 - fx) + h11 * fx
+
+        return h0 * (1 - fz) + h1 * fz
+      }
+    }
+    return null
+  }
+
+  // Blend heightmap with neighbors at borders
+  public blendWithNeighbors(): boolean {
+    if (!this.heightMap || !this.isLoaded) return false
+    if (this.blendVersion === this.lastBlendVersion) return false
+
+    const { segments, overlapSegments } = this.config
+    if (overlapSegments === 0) {
+      this.needsBlending = false
+      this.lastBlendVersion = this.blendVersion
+      return false
+    }
+
+    // Check if we have any loaded neighbors to blend with
+    let hasLoadedNeighbor = false
+    for (const neighbor of this.neighbors) {
+      if (neighbor && neighbor.heightMap) {
+        hasLoadedNeighbor = true
+        break
+      }
+    }
+
+    if (!hasLoadedNeighbor) {
+      return false
+    }
+
+    // Create blended heightmap
+    const virtualVertexCount = this.virtualVertexCount
+    const blendedMap = new Float32Array(this.heightMap)
+
+    const segmentSize = this.config.size / segments
+    const blendDistance = overlapSegments // How many segments to blend over
+
+    // Process each vertex in the visible area's border region
+    for (let i = 0; i < segments + 1; i++) {
+      for (let j = 0; j < segments + 1; j++) {
+        // Calculate distance to each edge (in segments)
+        const distToNorth = i
+        const distToSouth = segments - i
+        const distToWest = j
+        const distToEast = segments - j
+
+        // Only blend vertices near edges
+        const minDist = Math.min(
+          distToNorth,
+          distToSouth,
+          distToWest,
+          distToEast
+        )
+        if (minDist >= blendDistance) continue
+
+        // World position of this vertex
+        const worldX = this.worldX + j * segmentSize
+        const worldZ = this.worldZ + i * segmentSize
+
+        // Get height from neighbors
+        const neighborHeight = this.getNeighborHeightAtWorld(worldX, worldZ)
+        if (neighborHeight === null) continue
+
+        // Virtual heightmap index
+        const virtualI = i + overlapSegments
+        const virtualJ = j + overlapSegments
+        const idx = virtualI * virtualVertexCount + virtualJ
+
+        const myHeight = blendedMap[idx]
+
+        // Calculate blend weight based on distance to edge
+        // At edge (minDist=0): weight = 0.5 (50% blend)
+        // At blendDistance: weight = 1.0 (no blend)
+        const t = minDist / blendDistance
+        const blendWeight = smoothstep(0, 1, t)
+
+        // Blend: at edge we mix 50/50, further in we use more of our own height
+        const edgeBlend = 0.5 // How much neighbor influence at the very edge
+        const neighborInfluence = (1 - blendWeight) * edgeBlend
+        const blendedHeight =
+          myHeight * (1 - neighborInfluence) +
+          neighborHeight * neighborInfluence
+
+        blendedMap[idx] = blendedHeight
+      }
+    }
+
+    // Cache the blended heightmap
+    blendedHeightMapCache.set(this.key, blendedMap)
+    this.heightMap = blendedMap
+
+    this.needsBlending = false
+    this.lastBlendVersion = this.blendVersion
+
+    return true
+  }
+
+  // Update geometry after blending
+  public updateGeometryAfterBlend(): void {
+    if (!this.mesh || !this.heightMap) return
+
+    const { segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+    const visibleVertexCount = segments + 1
+
+    // Get position attribute
+    const positionAttribute = this.mesh.geometry.getAttribute('position')
+    if (!positionAttribute) return
+
+    const positions = positionAttribute.array as Float32Array
+
+    // Update Y values
+    for (let i = 0; i < visibleVertexCount; i++) {
+      for (let j = 0; j < visibleVertexCount; j++) {
+        const virtualI = i + overlapSegments
+        const virtualJ = j + overlapSegments
+        const y = this.heightMap[virtualI * virtualVertexCount + virtualJ]
+
+        const vertexIndex = (i * visibleVertexCount + j) * 3
+        positions[vertexIndex + 1] = y
+      }
+    }
+
+    positionAttribute.needsUpdate = true
+    this.mesh.geometry.computeVertexNormals()
+
+    // Clear geometry cache for this tile since it's been modified
+    geometryCache.delete(`${this.key}_visible`)
+  }
+
+  // Mark tile as needing blending (called when neighbor loads)
+  public markNeedsBlending(): void {
+    this.blendVersion++
+    this.needsBlending = true
   }
 
   // Generate geometry for visible area only
@@ -590,6 +805,7 @@ export class MapTile {
     // Clear from caches
     heightMapCache.delete(this.key)
     erodedHeightMapCache.delete(this.key)
+    blendedHeightMapCache.delete(this.key)
     geometryCache.delete(`${this.key}_visible`)
     geometryCache.delete(`${this.key}_overlapGeo`)
 
@@ -597,6 +813,8 @@ export class MapTile {
     this.geometry = null
     this.overlapGeometry = null
     this.isLoaded = false
+    this.needsBlending = true
+    this.lastBlendVersion = -1
 
     // Clear neighbor references
     this.neighbors.fill(null)
@@ -692,6 +910,7 @@ export class MapTile {
   public static clearCaches(): void {
     heightMapCache.clear()
     erodedHeightMapCache.clear()
+    blendedHeightMapCache.clear()
     geometryCache.clear()
     MapTile.noiseGenerators.clear()
 

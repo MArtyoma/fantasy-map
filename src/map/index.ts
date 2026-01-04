@@ -74,12 +74,13 @@ export class Map {
           minSlope: 0.01,
           gravity: 4,
         },
-        overlapSegments: 8, // Overlap with neighbors (for seamless erosion)
-        showOverlap: true, // Set to true to visualize overlap areas
+        overlapSegments: 16, // Overlap with neighbors (for seamless erosion)
+        showOverlap: false, // Set to true to visualize overlap areas
       },
       loadDistance: 4,
       unloadDistance: 6,
       maxTilesPerFrame: 1, // Reduced due to erosion processing time
+      maxBlendsPerFrame: 2, // Max blend operations per frame
     })
 
     // Initial tile load
