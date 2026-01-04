@@ -868,7 +868,8 @@ export class MapTile {
     positionAttribute.needsUpdate = true
 
     // Compute normals with neighbor awareness for smooth borders
-    this.computeNormalsWithNeighbors()
+    // this.computeNormalsWithNeighbors()
+    this.mesh.geometry.computeVertexNormals()
 
     // Clear geometry cache for this tile since it's been modified
     geometryCache.delete(`${this.key}_visible`)
