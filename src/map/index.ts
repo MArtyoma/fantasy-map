@@ -1,8 +1,14 @@
-import * as THREE from 'three'
-import { CameraController } from './camera-controller'
 import { TileManager } from './TileManager'
+import { CameraController } from './camera-controller'
+import * as THREE from 'three'
 
-export { MapTile, NeighborDirection } from './MapTile'
+export {
+  MapTile,
+  NeighborDirection,
+  DEFAULT_EROSION_CONFIG,
+  DEFAULT_TILE_CONFIG,
+} from './MapTile'
+export type { TileConfig, ErosionConfig } from './MapTile'
 export { TileManager } from './TileManager'
 export { CameraController } from './camera-controller'
 
@@ -56,17 +62,26 @@ export class Map {
         noiseScale: 8,
         heightScale: 4,
         seed: 12345,
+        erosion: {
+          enabled: true,
+          iterations: 3000,
+          inertia: 0.05,
+          capacity: 4,
+          deposition: 0.1,
+          erosion: 0.1,
+          evaporation: 0.02,
+          radius: 3,
+          minSlope: 0.01,
+          gravity: 4,
+        },
       },
       loadDistance: 4,
       unloadDistance: 6,
-      maxTilesPerFrame: 2,
+      maxTilesPerFrame: 1, // Reduced due to erosion processing time
     })
 
     // Initial tile load
-    Map.tileManager.forceLoadAll(
-      Map.camera.position.x,
-      Map.camera.position.z
-    )
+    Map.tileManager.forceLoadAll(Map.camera.position.x, Map.camera.position.z)
 
     this.addLighting()
 

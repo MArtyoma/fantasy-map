@@ -1,5 +1,6 @@
-import * as THREE from 'three'
+import { Erosion } from '../utils/erosion'
 import { PerlinNoise } from '../utils/perlin-noise'
+import * as THREE from 'three'
 
 // Neighbor directions
 export const NeighborDirection = {
@@ -13,7 +14,8 @@ export const NeighborDirection = {
   NorthWest: 7,
 } as const
 
-export type NeighborDirection = (typeof NeighborDirection)[keyof typeof NeighborDirection]
+export type NeighborDirection =
+  (typeof NeighborDirection)[keyof typeof NeighborDirection]
 
 // Direction offsets for neighbor calculation
 const NEIGHBOR_OFFSETS: [number, number][] = [
@@ -27,6 +29,20 @@ const NEIGHBOR_OFFSETS: [number, number][] = [
   [-1, -1], // NorthWest
 ]
 
+// Erosion configuration
+export interface ErosionConfig {
+  enabled: boolean // Whether erosion is enabled
+  iterations: number // Number of erosion iterations per tile
+  inertia: number // Droplet inertia (0-1)
+  capacity: number // Sediment capacity multiplier
+  deposition: number // Deposition rate
+  erosion: number // Erosion rate
+  evaporation: number // Evaporation rate
+  radius: number // Erosion radius
+  minSlope: number // Minimum slope for erosion
+  gravity: number // Gravity for droplet speed
+}
+
 // Tile configuration
 export interface TileConfig {
   size: number // World size of tile
@@ -34,6 +50,21 @@ export interface TileConfig {
   noiseScale: number // Scale for noise generation
   heightScale: number // Height multiplier
   seed: number // Seed for noise
+  erosion: ErosionConfig // Erosion settings
+}
+
+// Default erosion configuration
+export const DEFAULT_EROSION_CONFIG: ErosionConfig = {
+  enabled: true,
+  iterations: 5000,
+  inertia: 0.05,
+  capacity: 4,
+  deposition: 0.1,
+  erosion: 0.1,
+  evaporation: 0.02,
+  radius: 3,
+  minSlope: 0.01,
+  gravity: 4,
 }
 
 // Default configuration
@@ -43,13 +74,27 @@ export const DEFAULT_TILE_CONFIG: TileConfig = {
   noiseScale: 8,
   heightScale: 4,
   seed: 12345,
+  erosion: DEFAULT_EROSION_CONFIG,
 }
 
 // Cache for heightmaps to avoid regeneration
 const heightMapCache = new Map<string, Float32Array>()
 
+// Cache for eroded heightmaps (separate from raw heightmaps)
+const erodedHeightMapCache = new Map<string, Float32Array>()
+
 // Shared geometry cache
 const geometryCache = new Map<string, THREE.BufferGeometry>()
+
+// Shared erosion instance
+let sharedErosion: Erosion | null = null
+
+function getSharedErosion(): Erosion {
+  if (!sharedErosion) {
+    sharedErosion = new Erosion()
+  }
+  return sharedErosion
+}
 
 // Shared material (reused across all tiles)
 let sharedMaterial: THREE.MeshStandardMaterial | null = null
@@ -103,7 +148,11 @@ export class MapTile {
   // Perlin noise generator (shared across tiles with same seed)
   private static noiseGenerators = new Map<number, PerlinNoise>()
 
-  constructor(tileX: number, tileZ: number, config: TileConfig = DEFAULT_TILE_CONFIG) {
+  constructor(
+    tileX: number,
+    tileZ: number,
+    config: TileConfig = DEFAULT_TILE_CONFIG
+  ) {
     this.tileX = tileX
     this.tileZ = tileZ
     this.config = config
@@ -162,8 +211,8 @@ export class MapTile {
     return this.isLoaded
   }
 
-  // Generate heightmap (cached)
-  private generateHeightMap(): Float32Array {
+  // Generate raw heightmap without erosion (cached)
+  private generateRawHeightMap(): Float32Array {
     // Check cache first
     const cached = heightMapCache.get(this.key)
     if (cached) {
@@ -183,16 +232,65 @@ export class MapTile {
         const x = (j / segments) * size + this.worldX
 
         // Use world coordinates for seamless noise
-        const height = noise.noise2D(x / noiseScale, z / noiseScale) * heightScale
+        const height =
+          noise.noise2D(x / noiseScale, z / noiseScale) * heightScale
 
         heightMap[i * vertexCount + j] = height
       }
     }
 
-    // Cache the heightmap
+    // Cache the raw heightmap
     heightMapCache.set(this.key, heightMap)
 
     return heightMap
+  }
+
+  // Apply erosion to heightmap
+  private applyErosion(heightMap: Float32Array): Float32Array {
+    const { erosion: erosionConfig } = this.config
+
+    if (!erosionConfig.enabled) {
+      return heightMap
+    }
+
+    // Check eroded cache
+    const cachedEroded = erodedHeightMapCache.get(this.key)
+    if (cachedEroded) {
+      return cachedEroded
+    }
+
+    // Copy heightmap for erosion (don't modify original)
+    const erodedMap = new Float32Array(heightMap)
+
+    const vertexCount = this.config.segments + 1
+
+    // Configure erosion with tile settings
+    const erosion = getSharedErosion()
+    erosion.inertia = erosionConfig.inertia
+    erosion.capacity = erosionConfig.capacity
+    erosion.deposition = erosionConfig.deposition
+    erosion.erosion = erosionConfig.erosion
+    erosion.evaporation = erosionConfig.evaporation
+    erosion.radius = erosionConfig.radius
+    erosion.minSlope = erosionConfig.minSlope
+    erosion.gravity = erosionConfig.gravity
+
+    // Apply erosion
+    erosion.erode(erodedMap, vertexCount, vertexCount, erosionConfig.iterations)
+
+    // Cache the eroded heightmap
+    erodedHeightMapCache.set(this.key, erodedMap)
+
+    return erodedMap
+  }
+
+  // Generate heightmap with optional erosion (cached)
+  private generateHeightMap(): Float32Array {
+    // Generate or get raw heightmap
+    const rawHeightMap = this.generateRawHeightMap()
+
+    // Apply erosion if enabled
+    return this.applyErosion(rawHeightMap)
   }
 
   // Generate geometry
@@ -316,6 +414,7 @@ export class MapTile {
 
     // Clear from caches
     heightMapCache.delete(this.key)
+    erodedHeightMapCache.delete(this.key)
     geometryCache.delete(this.key)
 
     this.heightMap = null
@@ -385,6 +484,7 @@ export class MapTile {
   // Clear all static caches
   public static clearCaches(): void {
     heightMapCache.clear()
+    erodedHeightMapCache.clear()
     geometryCache.clear()
     MapTile.noiseGenerators.clear()
 
@@ -399,16 +499,21 @@ export class MapTile {
       sharedMaterial.dispose()
       sharedMaterial = null
     }
+
+    // Clear shared erosion
+    sharedErosion = null
   }
 
   // Get cache stats (for debugging)
   public static getCacheStats(): {
     heightMaps: number
+    erodedHeightMaps: number
     geometries: number
     pooledMeshes: number
   } {
     return {
       heightMaps: heightMapCache.size,
+      erodedHeightMaps: erodedHeightMapCache.size,
       geometries: geometryCache.size,
       pooledMeshes: meshPool.length,
     }

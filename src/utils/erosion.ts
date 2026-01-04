@@ -86,7 +86,16 @@ export class Erosion {
           sediment -= amount
 
           // Add to height
-          this.deposit(map, width, height, nodeX, nodeY, cellOffsetX, cellOffsetY, amount)
+          this.deposit(
+            map,
+            width,
+            height,
+            nodeX,
+            nodeY,
+            cellOffsetX,
+            cellOffsetY,
+            amount
+          )
         } else {
           // Erode
           const amount = Math.min(
@@ -96,7 +105,16 @@ export class Erosion {
           sediment += amount
 
           // Remove from height
-          this.deposit(map, width, height, nodeX, nodeY, cellOffsetX, cellOffsetY, -amount)
+          this.deposit(
+            map,
+            width,
+            height,
+            nodeX,
+            nodeY,
+            cellOffsetX,
+            cellOffsetY,
+            -amount
+          )
         }
 
         speed = Math.sqrt(Math.max(0, speed * speed - diff * this.gravity))
@@ -149,11 +167,11 @@ export class Erosion {
     offsetY: number,
     amount: number
   ) {
-      // Simple bilinear deposition
-      const idx = y * mapWidth + x
-      map[idx] += amount * (1 - offsetX) * (1 - offsetY)
-      map[idx + 1] += amount * offsetX * (1 - offsetY)
-      map[idx + mapWidth] += amount * (1 - offsetX) * offsetY
-      map[idx + mapWidth + 1] += amount * offsetX * offsetY
+    // Simple bilinear deposition
+    const idx = y * mapWidth + x
+    map[idx] += amount * (1 - offsetX) * (1 - offsetY)
+    map[idx + 1] += amount * offsetX * (1 - offsetY)
+    map[idx + mapWidth] += amount * (1 - offsetX) * offsetY
+    map[idx + mapWidth + 1] += amount * offsetX * offsetY
   }
 }

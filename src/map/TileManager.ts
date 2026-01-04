@@ -1,6 +1,6 @@
-import * as THREE from 'three'
-import { MapTile, DEFAULT_TILE_CONFIG, NeighborDirection } from './MapTile'
+import { DEFAULT_TILE_CONFIG, MapTile, NeighborDirection } from './MapTile'
 import type { TileConfig } from './MapTile'
+import * as THREE from 'three'
 
 export interface TileManagerConfig {
   tileConfig: TileConfig
@@ -101,7 +101,10 @@ export class TileManager {
     const [cameraTileX, cameraTileZ] = this.worldToTile(cameraX, cameraZ)
 
     // Only recalculate if camera moved to different tile
-    if (cameraTileX !== this.lastCameraTileX || cameraTileZ !== this.lastCameraTileZ) {
+    if (
+      cameraTileX !== this.lastCameraTileX ||
+      cameraTileZ !== this.lastCameraTileZ
+    ) {
       this.lastCameraTileX = cameraTileX
       this.lastCameraTileZ = cameraTileZ
 
@@ -113,7 +116,10 @@ export class TileManager {
   }
 
   // Calculate which tiles need to be loaded/unloaded
-  private calculatePendingOperations(cameraTileX: number, cameraTileZ: number): void {
+  private calculatePendingOperations(
+    cameraTileX: number,
+    cameraTileZ: number
+  ): void {
     const { loadDistance, unloadDistance } = this.config
     const loadDistSq = loadDistance * loadDistance
     const unloadDistSq = unloadDistance * unloadDistance

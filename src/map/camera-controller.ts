@@ -5,12 +5,7 @@ export class CameraController {
   private domElement: HTMLElement
 
   // Movement state
-  private keys = {
-    w: false,
-    a: false,
-    s: false,
-    d: false,
-  }
+  private keys = { w: false, a: false, s: false, d: false }
 
   // Mouse state
   private isDragging = false
@@ -156,18 +151,20 @@ export class CameraController {
     this.targetPosition.z = this.camera.position.z
 
     // Make camera look at the point below it
-    this.camera.lookAt(
-      this.camera.position.x,
-      0,
-      this.camera.position.z
-    )
+    this.camera.lookAt(this.camera.position.x, 0, this.camera.position.z)
   }
 
   public dispose(): void {
     window.removeEventListener('keydown', this.onKeyDown.bind(this))
     window.removeEventListener('keyup', this.onKeyUp.bind(this))
-    this.domElement.removeEventListener('mousedown', this.onMouseDown.bind(this))
-    this.domElement.removeEventListener('mousemove', this.onMouseMove.bind(this))
+    this.domElement.removeEventListener(
+      'mousedown',
+      this.onMouseDown.bind(this)
+    )
+    this.domElement.removeEventListener(
+      'mousemove',
+      this.onMouseMove.bind(this)
+    )
     this.domElement.removeEventListener('mouseup', this.onMouseUp.bind(this))
     this.domElement.removeEventListener('mouseleave', this.onMouseUp.bind(this))
     this.domElement.removeEventListener('wheel', this.onWheel.bind(this))
