@@ -866,10 +866,246 @@ export class MapTile {
     }
 
     positionAttribute.needsUpdate = true
-    this.mesh.geometry.computeVertexNormals()
+
+    // Compute normals with neighbor awareness for smooth borders
+    this.computeNormalsWithNeighbors()
 
     // Clear geometry cache for this tile since it's been modified
     geometryCache.delete(`${this.key}_visible`)
+  }
+
+  // Get height at grid position from blended heightmap
+  private getBlendedHeight(i: number, j: number): number {
+    const { overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+    const virtualI = i + overlapSegments
+    const virtualJ = j + overlapSegments
+
+    if (!this.heightMap) return 0
+    return this.heightMap[virtualI * virtualVertexCount + virtualJ]
+  }
+
+  // Get height from neighbor's blended heightmap at their grid position
+  private getNeighborBlendedHeight(
+    neighbor: MapTile,
+    neighborI: number,
+    neighborJ: number
+  ): number | null {
+    if (!neighbor.heightMap) return null
+
+    const { overlapSegments } = neighbor.config
+    const virtualVertexCount = neighbor.virtualVertexCount
+    const virtualI = neighborI + overlapSegments
+    const virtualJ = neighborJ + overlapSegments
+
+    if (
+      virtualI < 0 ||
+      virtualI >= virtualVertexCount ||
+      virtualJ < 0 ||
+      virtualJ >= virtualVertexCount
+    ) {
+      return null
+    }
+
+    return neighbor.heightMap[virtualI * virtualVertexCount + virtualJ]
+  }
+
+  // Compute vertex normals with awareness of neighbor tiles for smooth borders
+  private computeNormalsWithNeighbors(): void {
+    if (!this.mesh || !this.heightMap) return
+
+    const { segments } = this.config
+    const visibleVertexCount = segments + 1
+    const segmentSize = this.config.size / segments
+
+    // Get or create normal attribute
+    let normalAttribute = this.mesh.geometry.getAttribute('normal')
+    if (!normalAttribute) {
+      const normals = new Float32Array(
+        visibleVertexCount * visibleVertexCount * 3
+      )
+      normalAttribute = new THREE.BufferAttribute(normals, 3)
+      this.mesh.geometry.setAttribute('normal', normalAttribute)
+    }
+
+    const normals = normalAttribute.array as Float32Array
+
+    // Temporary vectors for calculations
+    const normal = new THREE.Vector3()
+    const v0 = new THREE.Vector3()
+    const v1 = new THREE.Vector3()
+    const v2 = new THREE.Vector3()
+    const edge1 = new THREE.Vector3()
+    const edge2 = new THREE.Vector3()
+    const faceNormal = new THREE.Vector3()
+
+    // For each vertex, compute the normal by averaging adjacent face normals
+    for (let i = 0; i <= segments; i++) {
+      for (let j = 0; j <= segments; j++) {
+        normal.set(0, 0, 0)
+
+        // Get height at this vertex and its neighbors
+        // We need heights for a 3x3 grid centered on (i, j)
+        const heights: (number | null)[][] = []
+
+        for (let di = -1; di <= 1; di++) {
+          heights[di + 1] = []
+          for (let dj = -1; dj <= 1; dj++) {
+            const ni = i + di
+            const nj = j + dj
+
+            heights[di + 1][dj + 1] = this.getHeightWithNeighborFallback(ni, nj)
+          }
+        }
+
+        // Calculate normals for up to 8 adjacent triangles
+        // Each quad has 2 triangles, vertex can be part of up to 4 quads
+        const faceNormals: THREE.Vector3[] = []
+
+        // Helper to add face normal if all heights are valid
+        const addFaceNormal = (
+          h0: number | null,
+          h1: number | null,
+          h2: number | null,
+          x0: number,
+          z0: number,
+          x1: number,
+          z1: number,
+          x2: number,
+          z2: number
+        ) => {
+          if (h0 === null || h1 === null || h2 === null) return
+
+          v0.set(x0 * segmentSize, h0, z0 * segmentSize)
+          v1.set(x1 * segmentSize, h1, z1 * segmentSize)
+          v2.set(x2 * segmentSize, h2, z2 * segmentSize)
+
+          edge1.subVectors(v1, v0)
+          edge2.subVectors(v2, v0)
+          faceNormal.crossVectors(edge1, edge2).normalize()
+
+          if (faceNormal.y < 0) faceNormal.negate()
+
+          faceNormals.push(faceNormal.clone())
+        }
+
+        // Center height
+        const hC = heights[1][1]
+        if (hC === null) continue
+
+        // Neighbor heights
+        const hN = heights[0][1] // North (i-1)
+        const hS = heights[2][1] // South (i+1)
+        const hW = heights[1][0] // West (j-1)
+        const hE = heights[1][2] // East (j+1)
+        const hNW = heights[0][0]
+        const hNE = heights[0][2]
+        const hSW = heights[2][0]
+        const hSE = heights[2][2]
+
+        // Triangle in NW quad (upper-left): vertices at (i-1,j-1), (i-1,j), (i,j)
+        addFaceNormal(hNW, hN, hC, -1, -1, 0, -1, 0, 0)
+        // Triangle in NW quad (lower-right): vertices at (i-1,j-1), (i,j), (i,j-1)
+        addFaceNormal(hNW, hC, hW, -1, -1, 0, 0, -1, 0)
+
+        // Triangle in NE quad: vertices at (i-1,j), (i-1,j+1), (i,j+1)
+        addFaceNormal(hN, hNE, hE, 0, -1, 1, -1, 1, 0)
+        // Triangle in NE quad: vertices at (i-1,j), (i,j+1), (i,j)
+        addFaceNormal(hN, hE, hC, 0, -1, 1, 0, 0, 0)
+
+        // Triangle in SW quad: vertices at (i,j-1), (i,j), (i+1,j)
+        addFaceNormal(hW, hC, hS, -1, 0, 0, 0, 0, 1)
+        // Triangle in SW quad: vertices at (i,j-1), (i+1,j), (i+1,j-1)
+        addFaceNormal(hW, hS, hSW, -1, 0, 0, 1, -1, 1)
+
+        // Triangle in SE quad: vertices at (i,j), (i,j+1), (i+1,j+1)
+        addFaceNormal(hC, hE, hSE, 0, 0, 1, 0, 1, 1)
+        // Triangle in SE quad: vertices at (i,j), (i+1,j+1), (i+1,j)
+        addFaceNormal(hC, hSE, hS, 0, 0, 1, 1, 0, 1)
+
+        // Average all face normals
+        if (faceNormals.length > 0) {
+          for (const fn of faceNormals) {
+            normal.add(fn)
+          }
+          normal.normalize()
+        } else {
+          normal.set(0, 1, 0) // Default up
+        }
+
+        // Store normal
+        const vertexIndex = (i * visibleVertexCount + j) * 3
+        normals[vertexIndex] = normal.x
+        normals[vertexIndex + 1] = normal.y
+        normals[vertexIndex + 2] = normal.z
+      }
+    }
+
+    normalAttribute.needsUpdate = true
+  }
+
+  // Get height at grid position, falling back to neighbors if outside our bounds
+  private getHeightWithNeighborFallback(i: number, j: number): number | null {
+    const { segments } = this.config
+
+    // If within our visible area, use our heightmap
+    if (i >= 0 && i <= segments && j >= 0 && j <= segments) {
+      return this.getBlendedHeight(i, j)
+    }
+
+    // Otherwise, try to get from neighbor
+    // Determine which neighbor to query
+    let neighbor: MapTile | null = null
+    let neighborI = i
+    let neighborJ = j
+
+    if (i < 0 && j >= 0 && j <= segments) {
+      // North neighbor
+      neighbor = this.neighbors[NeighborDirection.North]
+      neighborI = i + segments
+      neighborJ = j
+    } else if (i > segments && j >= 0 && j <= segments) {
+      // South neighbor
+      neighbor = this.neighbors[NeighborDirection.South]
+      neighborI = i - segments
+      neighborJ = j
+    } else if (j < 0 && i >= 0 && i <= segments) {
+      // West neighbor
+      neighbor = this.neighbors[NeighborDirection.West]
+      neighborI = i
+      neighborJ = j + segments
+    } else if (j > segments && i >= 0 && i <= segments) {
+      // East neighbor
+      neighbor = this.neighbors[NeighborDirection.East]
+      neighborI = i
+      neighborJ = j - segments
+    } else if (i < 0 && j < 0) {
+      // NorthWest corner
+      neighbor = this.neighbors[NeighborDirection.NorthWest]
+      neighborI = i + segments
+      neighborJ = j + segments
+    } else if (i < 0 && j > segments) {
+      // NorthEast corner
+      neighbor = this.neighbors[NeighborDirection.NorthEast]
+      neighborI = i + segments
+      neighborJ = j - segments
+    } else if (i > segments && j < 0) {
+      // SouthWest corner
+      neighbor = this.neighbors[NeighborDirection.SouthWest]
+      neighborI = i - segments
+      neighborJ = j + segments
+    } else if (i > segments && j > segments) {
+      // SouthEast corner
+      neighbor = this.neighbors[NeighborDirection.SouthEast]
+      neighborI = i - segments
+      neighborJ = j - segments
+    }
+
+    if (neighbor) {
+      return this.getNeighborBlendedHeight(neighbor, neighborI, neighborJ)
+    }
+
+    return null
   }
 
   // Mark tile as needing blending (called when neighbor loads)
