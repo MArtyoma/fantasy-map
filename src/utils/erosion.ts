@@ -15,8 +15,6 @@ export class Erosion {
     height: number,
     iterations: number = 50000
   ) {
-    const mapSize = width * height
-
     for (let i = 0; i < iterations; i++) {
       // Spawn New Droplet
       let posX = Math.random() * (width - 1)
@@ -126,7 +124,7 @@ export class Erosion {
   calculateHeightAndGradient(
     map: Float32Array,
     mapWidth: number,
-    mapHeight: number,
+    _mapHeight: number,
     posX: number,
     posY: number
   ) {
@@ -160,7 +158,7 @@ export class Erosion {
   deposit(
     map: Float32Array,
     mapWidth: number,
-    mapHeight: number,
+    _mapHeight: number,
     x: number,
     y: number,
     offsetX: number,

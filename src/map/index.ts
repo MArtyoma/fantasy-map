@@ -74,6 +74,8 @@ export class Map {
           minSlope: 0.01,
           gravity: 4,
         },
+        overlapSegments: 8, // Overlap with neighbors (for seamless erosion)
+        showOverlap: true, // Set to true to visualize overlap areas
       },
       loadDistance: 4,
       unloadDistance: 6,

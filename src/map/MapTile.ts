@@ -46,11 +46,13 @@ export interface ErosionConfig {
 // Tile configuration
 export interface TileConfig {
   size: number // World size of tile
-  segments: number // Number of segments per side
+  segments: number // Number of segments per side (visible)
   noiseScale: number // Scale for noise generation
   heightScale: number // Height multiplier
   seed: number // Seed for noise
   erosion: ErosionConfig // Erosion settings
+  overlapSegments: number // Number of overlap segments on each side
+  showOverlap: boolean // Whether to render overlap area (for debugging)
 }
 
 // Default erosion configuration
@@ -75,15 +77,17 @@ export const DEFAULT_TILE_CONFIG: TileConfig = {
   heightScale: 4,
   seed: 12345,
   erosion: DEFAULT_EROSION_CONFIG,
+  overlapSegments: 4,
+  showOverlap: false,
 }
 
-// Cache for heightmaps to avoid regeneration
+// Cache for heightmaps to avoid regeneration (includes overlap)
 const heightMapCache = new Map<string, Float32Array>()
 
 // Cache for eroded heightmaps (separate from raw heightmaps)
 const erodedHeightMapCache = new Map<string, Float32Array>()
 
-// Shared geometry cache
+// Shared geometry cache (key includes showOverlap state)
 const geometryCache = new Map<string, THREE.BufferGeometry>()
 
 // Shared erosion instance
@@ -96,8 +100,9 @@ function getSharedErosion(): Erosion {
   return sharedErosion
 }
 
-// Shared material (reused across all tiles)
+// Shared materials
 let sharedMaterial: THREE.MeshStandardMaterial | null = null
+let sharedOverlapMaterial: THREE.MeshStandardMaterial | null = null
 
 function getSharedMaterial(): THREE.MeshStandardMaterial {
   if (!sharedMaterial) {
@@ -109,6 +114,20 @@ function getSharedMaterial(): THREE.MeshStandardMaterial {
     })
   }
   return sharedMaterial
+}
+
+function getSharedOverlapMaterial(): THREE.MeshStandardMaterial {
+  if (!sharedOverlapMaterial) {
+    sharedOverlapMaterial = new THREE.MeshStandardMaterial({
+      color: 0x7c4a4e, // Reddish color for overlap visualization
+      side: THREE.DoubleSide,
+      wireframe: true,
+      flatShading: false,
+      transparent: true,
+      opacity: 0.5,
+    })
+  }
+  return sharedOverlapMaterial
 }
 
 // Object pool for meshes
@@ -133,9 +152,11 @@ export class MapTile {
 
   // Three.js objects
   private mesh: THREE.Mesh | null = null
+  private overlapMesh: THREE.Mesh | null = null
   private geometry: THREE.BufferGeometry | null = null
+  private overlapGeometry: THREE.BufferGeometry | null = null
 
-  // Heightmap data (cached)
+  // Heightmap data (cached, includes overlap)
   private heightMap: Float32Array | null = null
 
   // Neighbors (8 directions)
@@ -163,13 +184,43 @@ export class MapTile {
     return `${this.tileX}_${this.tileZ}`
   }
 
-  // Get world position
+  // Get world position (visible tile start)
   public get worldX(): number {
     return this.tileX * this.config.size
   }
 
   public get worldZ(): number {
     return this.tileZ * this.config.size
+  }
+
+  // Get world position including overlap (virtual tile start)
+  public get virtualWorldX(): number {
+    return this.worldX - this.overlapWorldSize
+  }
+
+  public get virtualWorldZ(): number {
+    return this.worldZ - this.overlapWorldSize
+  }
+
+  // Get overlap size in world units
+  private get overlapWorldSize(): number {
+    const segmentSize = this.config.size / this.config.segments
+    return this.config.overlapSegments * segmentSize
+  }
+
+  // Get total virtual size including both overlaps
+  public get virtualSize(): number {
+    return this.config.size + 2 * this.overlapWorldSize
+  }
+
+  // Get total virtual segments (including overlap on both sides)
+  private get virtualSegments(): number {
+    return this.config.segments + 2 * this.config.overlapSegments
+  }
+
+  // Get total virtual vertex count per side
+  private get virtualVertexCount(): number {
+    return this.virtualSegments + 1
   }
 
   // Get center position in world coordinates
@@ -211,7 +262,7 @@ export class MapTile {
     return this.isLoaded
   }
 
-  // Generate raw heightmap without erosion (cached)
+  // Generate raw heightmap without erosion (cached, includes overlap)
   private generateRawHeightMap(): Float32Array {
     // Check cache first
     const cached = heightMapCache.get(this.key)
@@ -220,22 +271,26 @@ export class MapTile {
     }
 
     const noise = this.getNoiseGenerator()
-    const vertexCount = this.config.segments + 1
-    const heightMap = new Float32Array(vertexCount * vertexCount)
+    const virtualVertexCount = this.virtualVertexCount
+    const heightMap = new Float32Array(virtualVertexCount * virtualVertexCount)
 
-    const { size, segments, noiseScale, heightScale } = this.config
+    const { noiseScale, heightScale } = this.config
+    const segmentSize = this.config.size / this.config.segments
 
-    for (let i = 0; i < vertexCount; i++) {
-      const z = (i / segments) * size + this.worldZ
+    // Generate heightmap for virtual area (including overlap)
+    for (let i = 0; i < virtualVertexCount; i++) {
+      // World Z coordinate (starts before visible tile due to overlap)
+      const z = this.virtualWorldZ + i * segmentSize
 
-      for (let j = 0; j < vertexCount; j++) {
-        const x = (j / segments) * size + this.worldX
+      for (let j = 0; j < virtualVertexCount; j++) {
+        // World X coordinate (starts before visible tile due to overlap)
+        const x = this.virtualWorldX + j * segmentSize
 
         // Use world coordinates for seamless noise
         const height =
           noise.noise2D(x / noiseScale, z / noiseScale) * heightScale
 
-        heightMap[i * vertexCount + j] = height
+        heightMap[i * virtualVertexCount + j] = height
       }
     }
 
@@ -262,7 +317,7 @@ export class MapTile {
     // Copy heightmap for erosion (don't modify original)
     const erodedMap = new Float32Array(heightMap)
 
-    const vertexCount = this.config.segments + 1
+    const virtualVertexCount = this.virtualVertexCount
 
     // Configure erosion with tile settings
     const erosion = getSharedErosion()
@@ -275,8 +330,13 @@ export class MapTile {
     erosion.minSlope = erosionConfig.minSlope
     erosion.gravity = erosionConfig.gravity
 
-    // Apply erosion
-    erosion.erode(erodedMap, vertexCount, vertexCount, erosionConfig.iterations)
+    // Apply erosion on full virtual heightmap (including overlap)
+    erosion.erode(
+      erodedMap,
+      virtualVertexCount,
+      virtualVertexCount,
+      erosionConfig.iterations
+    )
 
     // Cache the eroded heightmap
     erodedHeightMapCache.set(this.key, erodedMap)
@@ -293,28 +353,37 @@ export class MapTile {
     return this.applyErosion(rawHeightMap)
   }
 
-  // Generate geometry
-  private generateGeometry(): THREE.BufferGeometry {
-    // Check geometry cache
-    const cachedGeometry = geometryCache.get(this.key)
+  // Generate geometry for visible area only
+  private generateVisibleGeometry(): THREE.BufferGeometry {
+    const cacheKey = `${this.key}_visible`
+    const cachedGeometry = geometryCache.get(cacheKey)
     if (cachedGeometry) {
       return cachedGeometry
     }
 
     const heightMap = this.heightMap || this.generateHeightMap()
-    const { size, segments } = this.config
-    const vertexCount = segments + 1
+    const { size, segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+    const visibleVertexCount = segments + 1
 
-    // Create vertices
-    const vertices = new Float32Array(vertexCount * vertexCount * 3)
+    // Create vertices for visible area
+    const vertices = new Float32Array(
+      visibleVertexCount * visibleVertexCount * 3
+    )
     let vertexIndex = 0
 
-    for (let i = 0; i < vertexCount; i++) {
-      const z = (i / segments) * size
+    const segmentSize = size / segments
 
-      for (let j = 0; j < vertexCount; j++) {
-        const x = (j / segments) * size
-        const y = heightMap[i * vertexCount + j]
+    for (let i = 0; i < visibleVertexCount; i++) {
+      const z = i * segmentSize
+
+      for (let j = 0; j < visibleVertexCount; j++) {
+        const x = j * segmentSize
+
+        // Get height from virtual heightmap (offset by overlap)
+        const virtualI = i + overlapSegments
+        const virtualJ = j + overlapSegments
+        const y = heightMap[virtualI * virtualVertexCount + virtualJ]
 
         vertices[vertexIndex++] = x
         vertices[vertexIndex++] = y
@@ -328,10 +397,10 @@ export class MapTile {
 
     for (let i = 0; i < segments; i++) {
       for (let j = 0; j < segments; j++) {
-        const a = i * vertexCount + j
-        const b = i * vertexCount + j + 1
-        const c = (i + 1) * vertexCount + j
-        const d = (i + 1) * vertexCount + j + 1
+        const a = i * visibleVertexCount + j
+        const b = i * visibleVertexCount + j + 1
+        const c = (i + 1) * visibleVertexCount + j
+        const d = (i + 1) * visibleVertexCount + j + 1
 
         indices[indexOffset++] = a
         indices[indexOffset++] = b
@@ -350,7 +419,82 @@ export class MapTile {
     geometry.computeVertexNormals()
 
     // Cache geometry
-    geometryCache.set(this.key, geometry)
+    geometryCache.set(cacheKey, geometry)
+
+    return geometry
+  }
+
+  // Generate geometry for overlap areas (for visualization)
+  private generateOverlapGeometry(): THREE.BufferGeometry | null {
+    const { overlapSegments } = this.config
+    if (overlapSegments === 0) return null
+
+    const cacheKey = `${this.key}_overlapGeo`
+    const cachedGeometry = geometryCache.get(cacheKey)
+    if (cachedGeometry) {
+      return cachedGeometry
+    }
+
+    const heightMap = this.heightMap || this.generateHeightMap()
+    const virtualVertexCount = this.virtualVertexCount
+    const virtualSegments = this.virtualSegments
+    const segmentSize = this.config.size / this.config.segments
+
+    // Create vertices for entire virtual area
+    const vertices = new Float32Array(
+      virtualVertexCount * virtualVertexCount * 3
+    )
+    let vertexIndex = 0
+
+    for (let i = 0; i < virtualVertexCount; i++) {
+      // Position relative to visible tile start
+      const z = (i - overlapSegments) * segmentSize
+
+      for (let j = 0; j < virtualVertexCount; j++) {
+        const x = (j - overlapSegments) * segmentSize
+        const y = heightMap[i * virtualVertexCount + j]
+
+        vertices[vertexIndex++] = x
+        vertices[vertexIndex++] = y
+        vertices[vertexIndex++] = z
+      }
+    }
+
+    // Create indices only for overlap areas (not the center)
+    const indicesList: number[] = []
+
+    for (let i = 0; i < virtualSegments; i++) {
+      for (let j = 0; j < virtualSegments; j++) {
+        // Check if this quad is in the overlap area (not in center)
+        const inOverlapX =
+          j < overlapSegments || j >= this.config.segments + overlapSegments
+        const inOverlapZ =
+          i < overlapSegments || i >= this.config.segments + overlapSegments
+
+        if (inOverlapX || inOverlapZ) {
+          const a = i * virtualVertexCount + j
+          const b = i * virtualVertexCount + j + 1
+          const c = (i + 1) * virtualVertexCount + j
+          const d = (i + 1) * virtualVertexCount + j + 1
+
+          indicesList.push(a, b, d)
+          indicesList.push(a, d, c)
+        }
+      }
+    }
+
+    if (indicesList.length === 0) return null
+
+    const indices = new Uint32Array(indicesList)
+
+    // Create geometry
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+    geometry.computeVertexNormals()
+
+    // Cache geometry
+    geometryCache.set(cacheKey, geometry)
 
     return geometry
   }
@@ -367,23 +511,37 @@ export class MapTile {
     // Try to get mesh from pool
     this.mesh = getMeshFromPool()
 
+    // Generate visible geometry
+    this.geometry = this.generateVisibleGeometry()
+
     if (this.mesh) {
       // Reuse pooled mesh
-      this.geometry = this.generateGeometry()
       this.mesh.geometry = this.geometry
+      this.mesh.material = getSharedMaterial()
       this.mesh.position.set(this.worldX, 0, this.worldZ)
       this.mesh.visible = true
     } else {
       // Create new mesh
-      this.geometry = this.generateGeometry()
       this.mesh = new THREE.Mesh(this.geometry, getSharedMaterial())
       this.mesh.position.set(this.worldX, 0, this.worldZ)
-      scene.add(this.mesh)
     }
 
     // Add to scene if not already there
     if (!this.mesh.parent) {
       scene.add(this.mesh)
+    }
+
+    // Handle overlap visualization
+    if (this.config.showOverlap && this.config.overlapSegments > 0) {
+      this.overlapGeometry = this.generateOverlapGeometry()
+      if (this.overlapGeometry) {
+        this.overlapMesh = new THREE.Mesh(
+          this.overlapGeometry,
+          getSharedOverlapMaterial()
+        )
+        this.overlapMesh.position.set(this.worldX, 0.01, this.worldZ) // Slight offset to avoid z-fighting
+        scene.add(this.overlapMesh)
+      }
     }
 
     this.isLoaded = true
@@ -392,13 +550,22 @@ export class MapTile {
 
   // Unload tile (remove from scene, return mesh to pool)
   public unload(): void {
-    if (!this.isLoaded || !this.mesh) return
+    if (!this.isLoaded) return
 
-    // Return mesh to pool instead of disposing
-    returnMeshToPool(this.mesh)
+    if (this.mesh) {
+      // Return mesh to pool instead of disposing
+      returnMeshToPool(this.mesh)
+      this.mesh = null
+    }
 
-    // Clear references but keep cached data
-    this.mesh = null
+    if (this.overlapMesh) {
+      if (this.overlapMesh.parent) {
+        this.overlapMesh.parent.remove(this.overlapMesh)
+      }
+      this.overlapMesh.geometry.dispose()
+      this.overlapMesh = null
+    }
+
     this.isLoaded = false
   }
 
@@ -412,13 +579,23 @@ export class MapTile {
       this.mesh = null
     }
 
+    if (this.overlapMesh) {
+      if (this.overlapMesh.parent) {
+        this.overlapMesh.parent.remove(this.overlapMesh)
+      }
+      this.overlapMesh.geometry.dispose()
+      this.overlapMesh = null
+    }
+
     // Clear from caches
     heightMapCache.delete(this.key)
     erodedHeightMapCache.delete(this.key)
-    geometryCache.delete(this.key)
+    geometryCache.delete(`${this.key}_visible`)
+    geometryCache.delete(`${this.key}_overlapGeo`)
 
     this.heightMap = null
     this.geometry = null
+    this.overlapGeometry = null
     this.isLoaded = false
 
     // Clear neighbor references
@@ -429,39 +606,69 @@ export class MapTile {
   public getHeightAt(worldX: number, worldZ: number): number | null {
     if (!this.heightMap) return null
 
-    const localX = worldX - this.worldX
-    const localZ = worldZ - this.worldZ
-    const { size, segments } = this.config
+    // Convert to virtual local coordinates
+    const localX = worldX - this.virtualWorldX
+    const localZ = worldZ - this.virtualWorldZ
 
-    // Check bounds
-    if (localX < 0 || localX > size || localZ < 0 || localZ > size) {
+    const segmentSize = this.config.size / this.config.segments
+    const virtualSize = this.virtualSize
+
+    // Check bounds (within virtual area)
+    if (
+      localX < 0 ||
+      localX > virtualSize ||
+      localZ < 0 ||
+      localZ > virtualSize
+    ) {
       return null
     }
 
-    const vertexCount = segments + 1
+    const virtualVertexCount = this.virtualVertexCount
 
     // Convert to grid coordinates
-    const gridX = (localX / size) * segments
-    const gridZ = (localZ / size) * segments
+    const gridX = localX / segmentSize
+    const gridZ = localZ / segmentSize
 
     const x0 = Math.floor(gridX)
     const z0 = Math.floor(gridZ)
-    const x1 = Math.min(x0 + 1, segments)
-    const z1 = Math.min(z0 + 1, segments)
+    const x1 = Math.min(x0 + 1, this.virtualSegments)
+    const z1 = Math.min(z0 + 1, this.virtualSegments)
 
     const fx = gridX - x0
     const fz = gridZ - z0
 
     // Bilinear interpolation
-    const h00 = this.heightMap[z0 * vertexCount + x0]
-    const h10 = this.heightMap[z0 * vertexCount + x1]
-    const h01 = this.heightMap[z1 * vertexCount + x0]
-    const h11 = this.heightMap[z1 * vertexCount + x1]
+    const h00 = this.heightMap[z0 * virtualVertexCount + x0]
+    const h10 = this.heightMap[z0 * virtualVertexCount + x1]
+    const h01 = this.heightMap[z1 * virtualVertexCount + x0]
+    const h11 = this.heightMap[z1 * virtualVertexCount + x1]
 
     const h0 = h00 * (1 - fx) + h10 * fx
     const h1 = h01 * (1 - fx) + h11 * fx
 
     return h0 * (1 - fz) + h1 * fz
+  }
+
+  // Get raw heightmap data (for neighbor tiles to use)
+  public getHeightMapData(): Float32Array | null {
+    return this.heightMap
+  }
+
+  // Get height at virtual grid position (for neighbor access)
+  public getHeightAtGrid(gridX: number, gridZ: number): number | null {
+    if (!this.heightMap) return null
+
+    const virtualVertexCount = this.virtualVertexCount
+    if (
+      gridX < 0 ||
+      gridX >= virtualVertexCount ||
+      gridZ < 0 ||
+      gridZ >= virtualVertexCount
+    ) {
+      return null
+    }
+
+    return this.heightMap[gridZ * virtualVertexCount + gridX]
   }
 
   // Calculate distance to camera (squared for performance)
@@ -494,10 +701,14 @@ export class MapTile {
     }
     meshPool.length = 0
 
-    // Dispose shared material
+    // Dispose shared materials
     if (sharedMaterial) {
       sharedMaterial.dispose()
       sharedMaterial = null
+    }
+    if (sharedOverlapMaterial) {
+      sharedOverlapMaterial.dispose()
+      sharedOverlapMaterial = null
     }
 
     // Clear shared erosion
@@ -516,6 +727,37 @@ export class MapTile {
       erodedHeightMaps: erodedHeightMapCache.size,
       geometries: geometryCache.size,
       pooledMeshes: meshPool.length,
+    }
+  }
+
+  // Update showOverlap setting and reload if needed
+  public setShowOverlap(show: boolean, scene: THREE.Scene): void {
+    if (this.config.showOverlap === show) return
+
+    this.config.showOverlap = show
+
+    if (this.isLoaded) {
+      // Remove old overlap mesh if exists
+      if (this.overlapMesh) {
+        if (this.overlapMesh.parent) {
+          this.overlapMesh.parent.remove(this.overlapMesh)
+        }
+        this.overlapMesh.geometry.dispose()
+        this.overlapMesh = null
+      }
+
+      // Add new overlap mesh if needed
+      if (show && this.config.overlapSegments > 0) {
+        this.overlapGeometry = this.generateOverlapGeometry()
+        if (this.overlapGeometry) {
+          this.overlapMesh = new THREE.Mesh(
+            this.overlapGeometry,
+            getSharedOverlapMaterial()
+          )
+          this.overlapMesh.position.set(this.worldX, 0.01, this.worldZ)
+          scene.add(this.overlapMesh)
+        }
+      }
     }
   }
 }
