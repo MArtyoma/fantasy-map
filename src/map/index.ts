@@ -76,9 +76,8 @@ export class Map {
   private addBasicGeometry(): void {
     // const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x888888)
     // Map.scene.add(gridHelper)
-
-    const axesHelper = new THREE.AxesHelper(5)
-    Map.scene.add(axesHelper)
+    // const axesHelper = new THREE.AxesHelper(5)
+    // Map.scene.add(axesHelper)
   }
 
   /**

@@ -1,9 +1,11 @@
 import { Map } from '.'
+import { Erosion } from '../utils/erosion'
 import { PerlinNoise } from '../utils/perlin-noise'
 import * as THREE from 'three'
 
 export default class TestPlane {
   private perlinNoise = new PerlinNoise()
+  private erosion = new Erosion()
 
   constructor() {}
 
@@ -19,9 +21,12 @@ export default class TestPlane {
 
     // 2. Create the Vertex Array
     // You need (segments + 1) points along each axis
-    const vertices = []
+    const vertices: number[] = []
     const widthCount = widthSegments + 1
     const heightCount = heightSegments + 1
+
+    // Temporary heightmap for erosion
+    const heightMap = new Float32Array(widthCount * heightCount)
 
     for (let i = 0; i < heightCount; i++) {
       // Calculate Z position (0 to B)
@@ -36,8 +41,24 @@ export default class TestPlane {
         // Y is usually 0 for a flat plan
         const y = this.perlinNoise.noise2D(z / 8, x / 8) * 4
 
+        // Store in heightmap
+        heightMap[i * widthCount + j] = y
+
         // Push to array (x, y, z)
         vertices.push(x, y, z)
+      }
+    }
+
+    // Apply Erosion
+    console.time('Erosion')
+    this.erosion.erode(heightMap, widthCount, heightCount, 20000)
+    console.timeEnd('Erosion')
+
+    // Update vertices with new heights
+    for (let i = 0; i < heightCount; i++) {
+      for (let j = 0; j < widthCount; j++) {
+        const index = (i * widthCount + j) * 3
+        vertices[index + 1] = heightMap[i * widthCount + j]
       }
     }
 
@@ -75,6 +96,7 @@ export default class TestPlane {
       color: 0xffffff,
       side: THREE.DoubleSide,
       wireframe: true,
+      flatShading: false,
     })
 
     const plane = new THREE.Mesh(geometry, material)
