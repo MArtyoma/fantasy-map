@@ -118,7 +118,7 @@ function getSharedMaterial(): THREE.MeshStandardMaterial {
     sharedMaterial = new THREE.MeshStandardMaterial({
       color: 0x4a7c4e,
       side: THREE.DoubleSide,
-      wireframe: false,
+      wireframe: true,
       flatShading: false,
     })
   }
@@ -868,6 +868,7 @@ export class MapTile {
     positionAttribute.needsUpdate = true
 
     // Compute normals with neighbor awareness for smooth borders
+    // Uncomment below line and comment computeVertexNormals() for smooth tile borders:
     // this.computeNormalsWithNeighbors()
     this.mesh.geometry.computeVertexNormals()
 
@@ -911,8 +912,11 @@ export class MapTile {
     return neighbor.heightMap[virtualI * virtualVertexCount + virtualJ]
   }
 
-  // Compute vertex normals with awareness of neighbor tiles for smooth borders
-  private computeNormalsWithNeighbors(): void {
+  /**
+   * Compute vertex normals with awareness of neighbor tiles for smooth borders.
+   * Call this instead of computeVertexNormals() for seamless tile borders.
+   */
+  public computeNormalsWithNeighbors(): void {
     if (!this.mesh || !this.heightMap) return
 
     const { segments } = this.config

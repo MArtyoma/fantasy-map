@@ -15,7 +15,7 @@ export type { CameraSettings } from './camera-controller'
 
 export class Map {
   public static scene: THREE.Scene
-  public static camera: THREE.PerspectiveCamera
+  public static perspectiveCamera: THREE.PerspectiveCamera
   public static renderer: THREE.WebGLRenderer
   public static cameraController: CameraController
   public static tileManager: TileManager
@@ -30,15 +30,15 @@ export class Map {
     Map.scene = new THREE.Scene()
     Map.scene.background = new THREE.Color(0x87ceeb) // Sky blue background
 
-    Map.camera = new THREE.PerspectiveCamera(
+    Map.perspectiveCamera = new THREE.PerspectiveCamera(
       75,
       this.container.clientWidth / this.container.clientHeight,
       0.1,
       1000
     )
     // Position camera above and looking down
-    Map.camera.position.set(0, 25, 0)
-    Map.camera.lookAt(0, 0, 0)
+    Map.perspectiveCamera.position.set(0, 25, 0)
+    Map.perspectiveCamera.lookAt(0, 0, 0)
 
     Map.renderer = new THREE.WebGLRenderer({ antialias: true })
     Map.renderer.setSize(
@@ -51,7 +51,7 @@ export class Map {
 
     // Use custom camera controller for WASD + mouse + scroll control
     Map.cameraController = new CameraController(
-      Map.camera,
+      Map.perspectiveCamera,
       Map.renderer.domElement,
       {
         moveSpeed: 10,
@@ -64,6 +64,8 @@ export class Map {
         maxPitch: 90, // Maximum angle (looking straight down)
         initialPitch: 45, // Start at 45 degrees
         initialYaw: 0, // Start facing north
+        isometric: true, // Set to true for isometric projection
+        isometricScale: 30, // Scale factor for isometric view
       }
     )
 
@@ -72,12 +74,12 @@ export class Map {
       tileConfig: {
         size: 32,
         segments: 64,
-        noiseScale: 8,
-        heightScale: 4,
+        noiseScale: 32,
+        heightScale: 16,
         seed: 12345,
         erosion: {
           enabled: true,
-          iterations: 3000,
+          iterations: 6000,
           inertia: 0.05,
           capacity: 4,
           deposition: 0.1,
@@ -90,14 +92,18 @@ export class Map {
         overlapSegments: 16, // Overlap with neighbors (for seamless erosion)
         showOverlap: false, // Set to true to visualize overlap areas
       },
-      loadDistance: 4,
-      unloadDistance: 6,
+      loadDistance: 8,
+      unloadDistance: 12,
       maxTilesPerFrame: 1, // Reduced due to erosion processing time
       maxBlendsPerFrame: 2, // Max blend operations per frame
     })
 
     // Initial tile load
-    Map.tileManager.forceLoadAll(Map.camera.position.x, Map.camera.position.z)
+    const activeCamera = Map.cameraController.getActiveCamera()
+    Map.tileManager.forceLoadAll(
+      activeCamera.position.x,
+      activeCamera.position.z
+    )
 
     this.addLighting()
 
@@ -139,14 +145,13 @@ export class Map {
    */
   private setupResizeHandler(): void {
     const handleResize = () => {
-      Map.camera.aspect =
-        this.container.clientWidth / this.container.clientHeight
-      Map.camera.updateProjectionMatrix()
+      const width = this.container.clientWidth
+      const height = this.container.clientHeight
 
-      Map.renderer.setSize(
-        this.container.clientWidth,
-        this.container.clientHeight
-      )
+      // Update camera controller (handles both perspective and orthographic)
+      Map.cameraController.updateAspect(width, height)
+
+      Map.renderer.setSize(width, height)
     }
 
     window.addEventListener('resize', handleResize)
@@ -167,10 +172,13 @@ export class Map {
 
     Map.cameraController.update()
 
-    // Update tile manager with camera position
-    Map.tileManager.update(Map.camera.position.x, Map.camera.position.z)
+    // Get active camera for rendering
+    const activeCamera = Map.cameraController.getActiveCamera()
 
-    Map.renderer.render(Map.scene, Map.camera)
+    // Update tile manager with camera position
+    Map.tileManager.update(activeCamera.position.x, activeCamera.position.z)
+
+    Map.renderer.render(Map.scene, activeCamera)
   }
 
   /**
@@ -198,11 +206,19 @@ export class Map {
   }
 
   /**
-   * Get the camera instance
-   * @returns The Three.js camera
+   * Get the active camera instance
+   * @returns The Three.js camera (perspective or orthographic)
    */
-  public getCamera(): THREE.PerspectiveCamera {
-    return Map.camera
+  public getCamera(): THREE.Camera {
+    return Map.cameraController.getActiveCamera()
+  }
+
+  /**
+   * Get the perspective camera instance
+   * @returns The Three.js perspective camera
+   */
+  public getPerspectiveCamera(): THREE.PerspectiveCamera {
+    return Map.perspectiveCamera
   }
 
   /**
@@ -250,12 +266,10 @@ export class Map {
    * Update scene dimensions manually (useful for container size changes)
    */
   public updateSize(): void {
-    Map.camera.aspect = this.container.clientWidth / this.container.clientHeight
-    Map.camera.updateProjectionMatrix()
-    Map.renderer.setSize(
-      this.container.clientWidth,
-      this.container.clientHeight
-    )
+    const width = this.container.clientWidth
+    const height = this.container.clientHeight
+    Map.cameraController.updateAspect(width, height)
+    Map.renderer.setSize(width, height)
   }
 
   public static createLine(

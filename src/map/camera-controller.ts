@@ -11,6 +11,8 @@ export interface CameraSettings {
   maxPitch: number // Maximum pitch angle in degrees (90 = looking horizontal)
   initialPitch: number // Initial pitch angle in degrees
   initialYaw: number // Initial yaw angle in degrees
+  isometric: boolean // Enable isometric projection mode
+  isometricScale: number // Scale factor for orthographic camera (world units visible)
 }
 
 const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -24,10 +26,14 @@ const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   maxPitch: 90, // Maximum 90 degrees (looking straight down)
   initialPitch: 60, // Start at 60 degrees
   initialYaw: 0, // Start facing north
+  isometric: false, // Default to perspective projection
+  isometricScale: 30, // Default scale for orthographic view
 }
 
 export class CameraController {
-  private camera: THREE.PerspectiveCamera
+  private perspectiveCamera: THREE.PerspectiveCamera
+  private orthographicCamera: THREE.OrthographicCamera
+  private activeCamera: THREE.Camera
   private domElement: HTMLElement
 
   // Movement state
@@ -65,17 +71,47 @@ export class CameraController {
   private lastAppliedYaw = 0
   private lastAppliedZoom = 0
 
+  // Isometric mode state
+  private _isIsometric: boolean
+  private currentScale: number
+  private targetScale: number
+
   // Clock for delta time
   private clock = new THREE.Clock()
+
+  // Callback for camera change
+  private onCameraChange?: (camera: THREE.Camera) => void
 
   constructor(
     camera: THREE.PerspectiveCamera,
     domElement: HTMLElement,
-    settings: Partial<CameraSettings> = {}
+    settings: Partial<CameraSettings> = {},
+    onCameraChange?: (camera: THREE.Camera) => void
   ) {
-    this.camera = camera
+    this.perspectiveCamera = camera
     this.domElement = domElement
     this.settings = { ...DEFAULT_CAMERA_SETTINGS, ...settings }
+    this.onCameraChange = onCameraChange
+
+    // Create orthographic camera for isometric view
+    const aspect = domElement.clientWidth / domElement.clientHeight
+    const scale = this.settings.isometricScale
+    this.orthographicCamera = new THREE.OrthographicCamera(
+      -scale * aspect,
+      scale * aspect,
+      scale,
+      -scale,
+      0.1,
+      1000
+    )
+
+    // Initialize isometric state
+    this._isIsometric = this.settings.isometric
+    this.currentScale = scale
+    this.targetScale = scale
+    this.activeCamera = this._isIsometric
+      ? this.orthographicCamera
+      : this.perspectiveCamera
 
     // Initialize angles
     this.targetPitch = this.settings.initialPitch
@@ -97,6 +133,67 @@ export class CameraController {
     this.updateCameraFromAngles()
 
     this.setupEventListeners()
+  }
+
+  /**
+   * Get the currently active camera
+   */
+  public getActiveCamera(): THREE.Camera {
+    return this.activeCamera
+  }
+
+  /**
+   * Check if currently in isometric mode
+   */
+  public get isIsometric(): boolean {
+    return this._isIsometric
+  }
+
+  /**
+   * Toggle isometric projection mode
+   */
+  public setIsometric(enabled: boolean): void {
+    if (this._isIsometric === enabled) return
+
+    this._isIsometric = enabled
+    this.activeCamera = enabled
+      ? this.orthographicCamera
+      : this.perspectiveCamera
+
+    // Force camera update
+    this.needsUpdate = true
+    this.updateCameraPosition(this.currentZoom)
+
+    // Notify about camera change
+    if (this.onCameraChange) {
+      this.onCameraChange(this.activeCamera)
+    }
+  }
+
+  /**
+   * Toggle between perspective and isometric
+   */
+  public toggleProjection(): void {
+    this.setIsometric(!this._isIsometric)
+  }
+
+  /**
+   * Update orthographic camera frustum on resize
+   */
+  public updateAspect(width: number, height: number): void {
+    const aspect = width / height
+
+    // Update perspective camera
+    this.perspectiveCamera.aspect = aspect
+    this.perspectiveCamera.updateProjectionMatrix()
+
+    // Update orthographic camera
+    const scale = this.currentScale
+    this.orthographicCamera.left = -scale * aspect
+    this.orthographicCamera.right = scale * aspect
+    this.orthographicCamera.top = scale
+    this.orthographicCamera.bottom = -scale
+    this.orthographicCamera.updateProjectionMatrix()
   }
 
   private setupEventListeners(): void {
@@ -123,6 +220,11 @@ export class CameraController {
     const key = event.key.toLowerCase()
     if (key in this.keys) {
       this.keys[key as keyof typeof this.keys] = true
+    }
+
+    // Toggle isometric projection with 'i' key
+    if (key === 'i') {
+      this.toggleProjection()
     }
   }
 
@@ -155,7 +257,9 @@ export class CameraController {
 
     if (this.isDragging) {
       // Pan camera - move in the direction the camera is facing
-      const zoomFactor = this.camera.position.y * this.settings.dragSpeed
+      const zoomFactor =
+        (this._isIsometric ? this.currentScale : this.currentZoom) *
+        this.settings.dragSpeed
 
       // Calculate movement direction based on yaw
       const yawRad = (this.currentYaw * Math.PI) / 180
@@ -201,13 +305,24 @@ export class CameraController {
   private onWheel(event: WheelEvent): void {
     event.preventDefault()
 
-    // Calculate new zoom level
-    const zoomDelta = event.deltaY * 0.01 * this.settings.zoomSpeed
-    this.targetZoom = THREE.MathUtils.clamp(
-      this.targetZoom + zoomDelta,
-      this.settings.minZoom,
-      this.settings.maxZoom
-    )
+    if (this._isIsometric) {
+      // In isometric mode, zoom affects the scale
+      const scaleDelta = event.deltaY * 0.02 * this.settings.zoomSpeed
+      this.targetScale = THREE.MathUtils.clamp(
+        this.targetScale + scaleDelta,
+        this.settings.minZoom,
+        this.settings.maxZoom * 2
+      )
+    } else {
+      // In perspective mode, zoom affects the distance
+      const zoomDelta = event.deltaY * 0.01 * this.settings.zoomSpeed
+      this.targetZoom = THREE.MathUtils.clamp(
+        this.targetZoom + zoomDelta,
+        this.settings.minZoom,
+        this.settings.maxZoom
+      )
+    }
+    this.needsUpdate = true
   }
 
   public update(): void {
@@ -280,6 +395,7 @@ export class CameraController {
     const posZDiff = Math.abs(this.lookAtPoint.z - this.targetPosition.z)
     const pitchDiff = Math.abs(this.currentPitch - this.targetPitch)
     const zoomDiff = Math.abs(this.currentZoom - this.targetZoom)
+    const scaleDiff = Math.abs(this.currentScale - this.targetScale)
 
     // Calculate yaw difference with wrap-around
     let yawDiff = this.targetYaw - this.currentYaw
@@ -293,7 +409,8 @@ export class CameraController {
       posZDiff > positionThreshold ||
       pitchDiff > angleThreshold ||
       absYawDiff > angleThreshold ||
-      zoomDiff > zoomThreshold
+      zoomDiff > zoomThreshold ||
+      scaleDiff > zoomThreshold
 
     if (!needsInterpolation && !this.needsUpdate) {
       // Nothing to update, camera is stable
@@ -354,6 +471,17 @@ export class CameraController {
       this.currentZoom = this.targetZoom
     }
 
+    // Interpolate scale (for isometric mode)
+    if (scaleDiff > zoomThreshold) {
+      this.currentScale = THREE.MathUtils.lerp(
+        this.currentScale,
+        this.targetScale,
+        lerpFactor
+      )
+    } else {
+      this.currentScale = this.targetScale
+    }
+
     // Check if camera position actually changed
     const epsilon = 0.00001
     const posChanged =
@@ -361,7 +489,8 @@ export class CameraController {
       Math.abs(this.lookAtPoint.z - this.lastAppliedZ) > epsilon ||
       Math.abs(this.currentPitch - this.lastAppliedPitch) > epsilon ||
       Math.abs(this.currentYaw - this.lastAppliedYaw) > epsilon ||
-      Math.abs(this.currentZoom - this.lastAppliedZoom) > epsilon
+      Math.abs(this.currentZoom - this.lastAppliedZoom) > epsilon ||
+      scaleDiff > epsilon
 
     if (posChanged) {
       // Update camera position based on angles and zoom
@@ -392,15 +521,42 @@ export class CameraController {
     const offsetX = horizontalDist * Math.sin(yawRad)
     const offsetZ = horizontalDist * Math.cos(yawRad)
 
-    // Set camera position
-    this.camera.position.set(
-      this.lookAtPoint.x + offsetX,
-      verticalDist,
-      this.lookAtPoint.z + offsetZ
-    )
+    if (this._isIsometric) {
+      // For orthographic camera, position it far away and use scale for zoom
+      const orthoDistance = 200 // Fixed far distance
 
-    // Look at the target point
-    this.camera.lookAt(this.lookAtPoint.x, 0, this.lookAtPoint.z)
+      const orthoHorizontalDist = orthoDistance * Math.cos(pitchRad)
+      const orthoVerticalDist = orthoDistance * Math.sin(pitchRad)
+
+      const orthoOffsetX = orthoHorizontalDist * Math.sin(yawRad)
+      const orthoOffsetZ = orthoHorizontalDist * Math.cos(yawRad)
+
+      this.orthographicCamera.position.set(
+        this.lookAtPoint.x + orthoOffsetX,
+        orthoVerticalDist,
+        this.lookAtPoint.z + orthoOffsetZ
+      )
+
+      this.orthographicCamera.lookAt(this.lookAtPoint.x, 0, this.lookAtPoint.z)
+
+      // Update orthographic frustum based on scale
+      const aspect = this.domElement.clientWidth / this.domElement.clientHeight
+      this.orthographicCamera.left = -this.currentScale * aspect
+      this.orthographicCamera.right = this.currentScale * aspect
+      this.orthographicCamera.top = this.currentScale
+      this.orthographicCamera.bottom = -this.currentScale
+      this.orthographicCamera.updateProjectionMatrix()
+    } else {
+      // Set perspective camera position
+      this.perspectiveCamera.position.set(
+        this.lookAtPoint.x + offsetX,
+        verticalDist,
+        this.lookAtPoint.z + offsetZ
+      )
+
+      // Look at the target point
+      this.perspectiveCamera.lookAt(this.lookAtPoint.x, 0, this.lookAtPoint.z)
+    }
   }
 
   private updateCameraFromAngles(): void {
