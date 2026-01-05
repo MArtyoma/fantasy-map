@@ -1,5 +1,5 @@
-import * as THREE from 'three'
 import type { ErosionResult } from '../utils/erosion'
+import * as THREE from 'three'
 
 /**
  * Color rule for terrain painting based on various factors
@@ -82,7 +82,8 @@ export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
     // High peaks (snow/rock)
     {
       color: 0xd3d3d3, // Light gray
-      minHeight: 0.8,
+      minHeight: 5.0,
+      maxHeight: 200.0,
       blendWeight: 0.9,
     },
     // Steep cliffs
@@ -238,7 +239,8 @@ export class TerrainPainter {
     maxFlow: number
   ): VertexData {
     // Height (normalized 0-1)
-    const height = (heightMap[index] - minHeight) / heightRange
+    // const height = (heightMap[index] - minHeight) / heightRange
+    const height = heightMap[index]
 
     // Slope from normal (0 = flat, 1 = vertical)
     let slope = 0
@@ -406,19 +408,24 @@ export class TerrainPainter {
 
     // Apply influence based on what conditions the rule uses
     if (rule.minHeight !== undefined || rule.maxHeight !== undefined) {
-      weight *= this.config.heightInfluence + (1 - this.config.heightInfluence) * 0.5
+      weight *=
+        this.config.heightInfluence + (1 - this.config.heightInfluence) * 0.5
     }
     if (rule.minSlope !== undefined || rule.maxSlope !== undefined) {
-      weight *= this.config.slopeInfluence + (1 - this.config.slopeInfluence) * 0.5
+      weight *=
+        this.config.slopeInfluence + (1 - this.config.slopeInfluence) * 0.5
     }
     if (rule.minErosion !== undefined || rule.maxErosion !== undefined) {
-      weight *= this.config.erosionInfluence + (1 - this.config.erosionInfluence) * 0.5
+      weight *=
+        this.config.erosionInfluence + (1 - this.config.erosionInfluence) * 0.5
     }
     if (rule.minDeposit !== undefined || rule.maxDeposit !== undefined) {
-      weight *= this.config.depositInfluence + (1 - this.config.depositInfluence) * 0.5
+      weight *=
+        this.config.depositInfluence + (1 - this.config.depositInfluence) * 0.5
     }
     if (rule.minFlow !== undefined || rule.maxFlow !== undefined) {
-      weight *= this.config.flowInfluence + (1 - this.config.flowInfluence) * data.flow
+      weight *=
+        this.config.flowInfluence + (1 - this.config.flowInfluence) * data.flow
     }
 
     return weight
@@ -435,10 +442,7 @@ export class TerrainPainter {
   /**
    * Apply vertex colors to a geometry
    */
-  applyToGeometry(
-    geometry: THREE.BufferGeometry,
-    colors: Float32Array
-  ): void {
+  applyToGeometry(geometry: THREE.BufferGeometry, colors: Float32Array): void {
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
   }
 

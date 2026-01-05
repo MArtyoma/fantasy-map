@@ -17,10 +17,7 @@ export {
   TerrainPainter,
   DEFAULT_TERRAIN_PAINTER_CONFIG,
 } from './terrain-painter'
-export type {
-  TerrainPainterConfig,
-  ColorRule,
-} from './terrain-painter'
+export type { TerrainPainterConfig, ColorRule } from './terrain-painter'
 
 export class Map {
   public static scene: THREE.Scene
@@ -56,6 +53,11 @@ export class Map {
     )
     Map.renderer.setPixelRatio(window.devicePixelRatio)
 
+    Map.renderer.toneMapping = THREE.CineonToneMapping
+    Map.renderer.toneMappingExposure = 1.75
+    Map.renderer.shadowMap.enabled = true
+    Map.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+
     this.container.appendChild(Map.renderer.domElement)
 
     // Use custom camera controller for WASD + mouse + scroll control
@@ -71,7 +73,7 @@ export class Map {
         maxZoom: 100,
         minPitch: 15, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 45, // Start at 45 degrees
+        initialPitch: 15, // Start at 45 degrees
         initialYaw: 0, // Start facing north
         isometric: true, // Set to true for isometric projection
         isometricScale: 30, // Scale factor for isometric view
@@ -102,8 +104,8 @@ export class Map {
         showOverlap: false, // Set to true to visualize overlap areas
         painter: DEFAULT_TERRAIN_PAINTER_CONFIG, // Terrain painting configuration
       },
-      loadDistance: 8,
-      unloadDistance: 12,
+      loadDistance: 4,
+      unloadDistance: 6,
       maxTilesPerFrame: 1, // Reduced due to erosion processing time
       maxBlendsPerFrame: 2, // Max blend operations per frame
     })
@@ -134,6 +136,9 @@ export class Map {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
     directionalLight.position.set(10, 10, 5)
+    directionalLight.castShadow = true
+    directionalLight.shadow.mapSize.width = 4096
+    directionalLight.shadow.mapSize.height = 4096
     Map.scene.add(directionalLight)
 
     const hemisphereLight = new THREE.HemisphereLight(0x4488aa, 0xcc8866, 0.3)

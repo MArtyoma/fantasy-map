@@ -1474,6 +1474,9 @@ export class MapTile {
       this.mesh.position.set(this.worldX, 0, this.worldZ)
     }
 
+    this.mesh.castShadow = true
+    this.mesh.receiveShadow = true
+
     // Add to scene if not already there
     if (!this.mesh.parent) {
       scene.add(this.mesh)
