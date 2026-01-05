@@ -1,5 +1,10 @@
-import { Erosion } from '../utils/erosion'
+import { Erosion, type ErosionResult } from '../utils/erosion'
 import { PerlinNoise } from '../utils/perlin-noise'
+import {
+  DEFAULT_TERRAIN_PAINTER_CONFIG,
+  TerrainPainter,
+} from './terrain-painter'
+import type { TerrainPainterConfig } from './terrain-painter'
 import * as THREE from 'three'
 
 // Neighbor directions
@@ -53,6 +58,7 @@ export interface TileConfig {
   erosion: ErosionConfig // Erosion settings
   overlapSegments: number // Number of overlap segments on each side
   showOverlap: boolean // Whether to render overlap area (for debugging)
+  painter: TerrainPainterConfig // Terrain painting configuration
 }
 
 // Default erosion configuration
@@ -79,6 +85,7 @@ export const DEFAULT_TILE_CONFIG: TileConfig = {
   erosion: DEFAULT_EROSION_CONFIG,
   overlapSegments: 4,
   showOverlap: false,
+  painter: DEFAULT_TERRAIN_PAINTER_CONFIG,
 }
 
 // Cache for heightmaps to avoid regeneration (includes overlap)
@@ -89,6 +96,9 @@ const erodedHeightMapCache = new Map<string, Float32Array>()
 
 // Cache for blended heightmaps (after neighbor blending)
 const blendedHeightMapCache = new Map<string, Float32Array>()
+
+// Cache for erosion results (erosion/deposit/flow maps)
+const erosionResultCache = new Map<string, ErosionResult>()
 
 // Shared geometry cache (key includes showOverlap state)
 const geometryCache = new Map<string, THREE.BufferGeometry>()
@@ -116,10 +126,10 @@ let sharedOverlapMaterial: THREE.MeshStandardMaterial | null = null
 function getSharedMaterial(): THREE.MeshStandardMaterial {
   if (!sharedMaterial) {
     sharedMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4a7c4e,
+      vertexColors: true, // Enable vertex colors
       side: THREE.DoubleSide,
-      wireframe: true,
-      flatShading: false,
+      wireframe: false,
+      flatShading: true,
     })
   }
   return sharedMaterial
@@ -168,6 +178,12 @@ export class MapTile {
   // Heightmap data (cached, includes overlap)
   private heightMap: Float32Array | null = null
 
+  // Erosion result data (for terrain painting)
+  private erosionResult: ErosionResult | null = null
+
+  // Terrain painter instance
+  private painter: TerrainPainter
+
   // Neighbors (8 directions)
   private neighbors: (MapTile | null)[] = new Array(8).fill(null)
 
@@ -189,6 +205,7 @@ export class MapTile {
     this.tileX = tileX
     this.tileZ = tileZ
     this.config = config
+    this.painter = new TerrainPainter(config.painter)
   }
 
   // Get unique key for this tile
@@ -280,6 +297,64 @@ export class MapTile {
     return this.isLoaded
   }
 
+  /**
+   * Get the terrain painter instance
+   */
+  public getPainter(): TerrainPainter {
+    return this.painter
+  }
+
+  /**
+   * Update terrain painter configuration
+   */
+  public setPainterConfig(config: Partial<TerrainPainterConfig>): void {
+    this.painter.setConfig(config)
+    // Mark for re-painting if loaded
+    if (this.isLoaded && this.mesh) {
+      this.repaintTerrain()
+    }
+  }
+
+  /**
+   * Get the erosion result data (erosion, deposit, flow maps)
+   */
+  public getErosionResult(): ErosionResult | null {
+    return this.erosionResult
+  }
+
+  /**
+   * Repaint terrain with current painter settings
+   */
+  public repaintTerrain(): void {
+    if (!this.mesh || !this.heightMap) return
+
+    const { segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+
+    const normals = this.mesh.geometry.getAttribute('normal')
+      ?.array as Float32Array | null
+    const visibleErosionResult = this.extractVisibleErosionResult()
+    const visibleHeightMap = this.extractVisibleHeightMap(
+      this.heightMap,
+      segments,
+      overlapSegments,
+      virtualVertexCount
+    )
+
+    const colors = this.painter.calculateVertexColors(
+      visibleHeightMap,
+      normals,
+      visibleErosionResult,
+      segments,
+      this.config.heightScale
+    )
+
+    this.mesh.geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(colors, 3)
+    )
+  }
+
   // Generate raw heightmap without erosion (cached, includes overlap)
   private generateRawHeightMap(): Float32Array {
     // Check cache first
@@ -328,7 +403,9 @@ export class MapTile {
 
     // Check eroded cache
     const cachedEroded = erodedHeightMapCache.get(this.key)
-    if (cachedEroded) {
+    const cachedErosionResult = erosionResultCache.get(this.key)
+    if (cachedEroded && cachedErosionResult) {
+      this.erosionResult = cachedErosionResult
       return cachedEroded
     }
 
@@ -349,15 +426,17 @@ export class MapTile {
     erosion.gravity = erosionConfig.gravity
 
     // Apply erosion on full virtual heightmap (including overlap)
-    erosion.erode(
+    // This now returns the erosion result with erosion/deposit/flow maps
+    this.erosionResult = erosion.erode(
       erodedMap,
       virtualVertexCount,
       virtualVertexCount,
       erosionConfig.iterations
     )
 
-    // Cache the eroded heightmap
+    // Cache the eroded heightmap and erosion result
     erodedHeightMapCache.set(this.key, erodedMap)
+    erosionResultCache.set(this.key, this.erosionResult)
 
     return erodedMap
   }
@@ -872,6 +951,30 @@ export class MapTile {
     // this.computeNormalsWithNeighbors()
     this.mesh.geometry.computeVertexNormals()
 
+    // Recalculate vertex colors after blending
+    const normals = this.mesh.geometry.getAttribute('normal')
+      ?.array as Float32Array | null
+    const visibleErosionResult = this.extractVisibleErosionResult()
+    const visibleHeightMap = this.extractVisibleHeightMap(
+      this.heightMap,
+      segments,
+      overlapSegments,
+      virtualVertexCount
+    )
+
+    const colors = this.painter.calculateVertexColors(
+      visibleHeightMap,
+      normals,
+      visibleErosionResult,
+      segments,
+      this.config.heightScale
+    )
+
+    this.mesh.geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(colors, 3)
+    )
+
     // Clear geometry cache for this tile since it's been modified
     geometryCache.delete(`${this.key}_visible`)
   }
@@ -1184,10 +1287,89 @@ export class MapTile {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1))
     geometry.computeVertexNormals()
 
+    // Calculate and apply vertex colors
+    const normals = geometry.getAttribute('normal')
+      ?.array as Float32Array | null
+
+    // Extract visible portion of erosion data for painting
+    const visibleErosionResult = this.extractVisibleErosionResult()
+
+    const colors = this.painter.calculateVertexColors(
+      this.extractVisibleHeightMap(
+        heightMap,
+        segments,
+        overlapSegments,
+        virtualVertexCount
+      ),
+      normals,
+      visibleErosionResult,
+      segments,
+      this.config.heightScale
+    )
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+
     // Cache geometry
     geometryCache.set(cacheKey, geometry)
 
     return geometry
+  }
+
+  // Extract visible portion of heightmap for painting
+  private extractVisibleHeightMap(
+    fullHeightMap: Float32Array,
+    segments: number,
+    overlapSegments: number,
+    virtualVertexCount: number
+  ): Float32Array {
+    const visibleVertexCount = segments + 1
+    const visibleHeightMap = new Float32Array(
+      visibleVertexCount * visibleVertexCount
+    )
+
+    for (let i = 0; i <= segments; i++) {
+      for (let j = 0; j <= segments; j++) {
+        const virtualI = i + overlapSegments
+        const virtualJ = j + overlapSegments
+        const srcIdx = virtualI * virtualVertexCount + virtualJ
+        const dstIdx = i * visibleVertexCount + j
+        visibleHeightMap[dstIdx] = fullHeightMap[srcIdx]
+      }
+    }
+
+    return visibleHeightMap
+  }
+
+  // Extract visible portion of erosion result for painting
+  private extractVisibleErosionResult(): ErosionResult | null {
+    if (!this.erosionResult) return null
+
+    const { segments, overlapSegments } = this.config
+    const virtualVertexCount = this.virtualVertexCount
+    const visibleVertexCount = segments + 1
+    const visibleSize = visibleVertexCount * visibleVertexCount
+
+    const visibleErosionMap = new Float32Array(visibleSize)
+    const visibleDepositMap = new Float32Array(visibleSize)
+    const visibleFlowMap = new Float32Array(visibleSize)
+
+    for (let i = 0; i <= segments; i++) {
+      for (let j = 0; j <= segments; j++) {
+        const virtualI = i + overlapSegments
+        const virtualJ = j + overlapSegments
+        const srcIdx = virtualI * virtualVertexCount + virtualJ
+        const dstIdx = i * visibleVertexCount + j
+
+        visibleErosionMap[dstIdx] = this.erosionResult.erosionMap[srcIdx]
+        visibleDepositMap[dstIdx] = this.erosionResult.depositMap[srcIdx]
+        visibleFlowMap[dstIdx] = this.erosionResult.flowMap[srcIdx]
+      }
+    }
+
+    return {
+      erosionMap: visibleErosionMap,
+      depositMap: visibleDepositMap,
+      flowMap: visibleFlowMap,
+    }
   }
 
   // Generate geometry for overlap areas (for visualization)
@@ -1462,6 +1644,7 @@ export class MapTile {
     heightMapCache.clear()
     erodedHeightMapCache.clear()
     blendedHeightMapCache.clear()
+    erosionResultCache.clear()
     geometryCache.clear()
     MapTile.noiseGenerators.clear()
 

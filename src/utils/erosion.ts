@@ -1,5 +1,12 @@
 import Random from '../map/random'
 
+// Result of erosion containing all generated data maps
+export interface ErosionResult {
+  erosionMap: Float32Array // Amount eroded at each point
+  depositMap: Float32Array // Amount deposited at each point
+  flowMap: Float32Array // Water flow accumulation (how much water passed through)
+}
+
 export class Erosion {
   // Parameters
   inertia = 0.05
@@ -12,12 +19,29 @@ export class Erosion {
   radius = 3
   random = new Random(123)
 
+  // Last erosion result
+  private lastResult: ErosionResult | null = null
+
+  /**
+   * Get the result from the last erosion operation
+   */
+  getLastResult(): ErosionResult | null {
+    return this.lastResult
+  }
+
   erode(
     map: Float32Array,
     width: number,
     height: number,
     iterations: number = 50000
-  ) {
+  ): ErosionResult {
+    const size = width * height
+
+    // Initialize tracking maps
+    const erosionMap = new Float32Array(size)
+    const depositMap = new Float32Array(size)
+    const flowMap = new Float32Array(size)
+
     for (let i = 0; i < iterations; i++) {
       // Spawn New Droplet
       let posY = this.random.next() * (height - 1)
@@ -33,6 +57,17 @@ export class Erosion {
         const nodeY = Math.floor(posY)
         const cellOffsetX = posX - nodeX
         const cellOffsetY = posY - nodeY
+
+        // Track water flow at this position
+        this.addToMap(
+          flowMap,
+          width,
+          nodeX,
+          nodeY,
+          cellOffsetX,
+          cellOffsetY,
+          water
+        )
 
         // Get height and gradient
         const heightData = this.calculateHeightAndGradient(
@@ -86,11 +121,22 @@ export class Erosion {
               : (sediment - sedimentCapacity) * this.deposition
           sediment -= amount
 
-          // Add to height
+          // Add to height map
           this.deposit(
             map,
             width,
             height,
+            nodeX,
+            nodeY,
+            cellOffsetX,
+            cellOffsetY,
+            amount
+          )
+
+          // Track deposit
+          this.addToMap(
+            depositMap,
+            width,
             nodeX,
             nodeY,
             cellOffsetX,
@@ -105,7 +151,7 @@ export class Erosion {
           )
           sediment += amount
 
-          // Remove from height
+          // Remove from height map
           this.deposit(
             map,
             width,
@@ -116,12 +162,46 @@ export class Erosion {
             cellOffsetY,
             -amount
           )
+
+          // Track erosion
+          this.addToMap(
+            erosionMap,
+            width,
+            nodeX,
+            nodeY,
+            cellOffsetX,
+            cellOffsetY,
+            amount
+          )
         }
 
         speed = Math.sqrt(Math.max(0, speed * speed - diff * this.gravity))
         water *= 1 - this.evaporation
       }
     }
+
+    // Store result
+    this.lastResult = { erosionMap, depositMap, flowMap }
+    return this.lastResult
+  }
+
+  /**
+   * Add value to a tracking map using bilinear distribution
+   */
+  private addToMap(
+    targetMap: Float32Array,
+    width: number,
+    x: number,
+    y: number,
+    offsetX: number,
+    offsetY: number,
+    amount: number
+  ): void {
+    const idx = y * width + x
+    targetMap[idx] += amount * (1 - offsetX) * (1 - offsetY)
+    targetMap[idx + 1] += amount * offsetX * (1 - offsetY)
+    targetMap[idx + width] += amount * (1 - offsetX) * offsetY
+    targetMap[idx + width + 1] += amount * offsetX * offsetY
   }
 
   calculateHeightAndGradient(

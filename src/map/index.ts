@@ -1,5 +1,6 @@
 import { TileManager } from './TileManager'
 import { CameraController } from './camera-controller'
+import { DEFAULT_TERRAIN_PAINTER_CONFIG } from './terrain-painter'
 import * as THREE from 'three'
 
 export {
@@ -12,6 +13,14 @@ export type { TileConfig, ErosionConfig } from './MapTile'
 export { TileManager } from './TileManager'
 export { CameraController } from './camera-controller'
 export type { CameraSettings } from './camera-controller'
+export {
+  TerrainPainter,
+  DEFAULT_TERRAIN_PAINTER_CONFIG,
+} from './terrain-painter'
+export type {
+  TerrainPainterConfig,
+  ColorRule,
+} from './terrain-painter'
 
 export class Map {
   public static scene: THREE.Scene
@@ -91,6 +100,7 @@ export class Map {
         },
         overlapSegments: 16, // Overlap with neighbors (for seamless erosion)
         showOverlap: false, // Set to true to visualize overlap areas
+        painter: DEFAULT_TERRAIN_PAINTER_CONFIG, // Terrain painting configuration
       },
       loadDistance: 8,
       unloadDistance: 12,
