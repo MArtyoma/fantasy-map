@@ -1,3 +1,5 @@
+import Random from '../map/random'
+
 export class Erosion {
   // Parameters
   inertia = 0.05
@@ -8,6 +10,7 @@ export class Erosion {
   gravity = 4
   evaporation = 0.02
   radius = 3
+  random = new Random(123)
 
   erode(
     map: Float32Array,
@@ -17,8 +20,8 @@ export class Erosion {
   ) {
     for (let i = 0; i < iterations; i++) {
       // Spawn New Droplet
-      let posX = Math.random() * (width - 1)
-      let posY = Math.random() * (height - 1)
+      let posY = this.random.next() * (height - 1)
+      let posX = this.random.next() * (width - 1)
       let dirX = 0
       let dirY = 0
       let speed = 1

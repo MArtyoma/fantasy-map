@@ -306,7 +306,7 @@ export class MapTile {
 
         // Use world coordinates for seamless noise
         const height =
-          noise.noise2D(x / noiseScale, z / noiseScale) * heightScale
+          noise.fractalNoise2D(x / noiseScale, z / noiseScale) * heightScale
 
         heightMap[i * virtualVertexCount + j] = height
       }
