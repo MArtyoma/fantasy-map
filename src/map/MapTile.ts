@@ -1,6 +1,21 @@
 import { Erosion, type ErosionResult } from '../utils/erosion'
 import { PerlinNoise } from '../utils/perlin-noise'
 import {
+  DEFAULT_CARTOON_CONFIG,
+  DEFAULT_OUTLINE_CONFIG,
+  DEFAULT_SHADING_CONFIG,
+  createCartoonMaterial,
+  createOutlineMaterial,
+  setCartoonLightDirection,
+  updateCartoonMaterial,
+  updateOutlineMaterial,
+} from './CartoonMaterial'
+import type {
+  CartoonConfig,
+  CartoonOutlineConfig,
+  CartoonShadingConfig,
+} from './CartoonMaterial'
+import {
   DEFAULT_TERRAIN_PAINTER_CONFIG,
   TerrainPainter,
 } from './terrain-painter'
@@ -59,6 +74,7 @@ export interface TileConfig {
   overlapSegments: number // Number of overlap segments on each side
   showOverlap: boolean // Whether to render overlap area (for debugging)
   painter: TerrainPainterConfig // Terrain painting configuration
+  cartoon: CartoonConfig // Cartoon shader configuration
 }
 
 // Default erosion configuration
@@ -86,6 +102,7 @@ export const DEFAULT_TILE_CONFIG: TileConfig = {
   overlapSegments: 4,
   showOverlap: false,
   painter: DEFAULT_TERRAIN_PAINTER_CONFIG,
+  cartoon: DEFAULT_CARTOON_CONFIG,
 }
 
 // Cache for heightmaps to avoid regeneration (includes overlap)
@@ -122,6 +139,11 @@ function getSharedErosion(): Erosion {
 // Shared materials
 let sharedMaterial: THREE.MeshStandardMaterial | null = null
 let sharedOverlapMaterial: THREE.MeshStandardMaterial | null = null
+let sharedCartoonMaterial: THREE.ShaderMaterial | null = null
+let sharedOutlineMaterial: THREE.ShaderMaterial | null = null
+
+// Current cartoon config for shared materials
+let currentCartoonConfig: CartoonConfig = DEFAULT_CARTOON_CONFIG
 
 function getSharedMaterial(): THREE.MeshStandardMaterial {
   if (!sharedMaterial) {
@@ -133,6 +155,26 @@ function getSharedMaterial(): THREE.MeshStandardMaterial {
     })
   }
   return sharedMaterial
+}
+
+function getSharedCartoonMaterial(
+  config: CartoonShadingConfig = DEFAULT_SHADING_CONFIG
+): THREE.ShaderMaterial {
+  if (!sharedCartoonMaterial) {
+    sharedCartoonMaterial = createCartoonMaterial(config)
+    currentCartoonConfig.shading = config
+  }
+  return sharedCartoonMaterial
+}
+
+function getSharedOutlineMaterial(
+  config: CartoonOutlineConfig = DEFAULT_OUTLINE_CONFIG
+): THREE.ShaderMaterial {
+  if (!sharedOutlineMaterial) {
+    sharedOutlineMaterial = createOutlineMaterial(config)
+    currentCartoonConfig.outline = config
+  }
+  return sharedOutlineMaterial
 }
 
 function getSharedOverlapMaterial(): THREE.MeshStandardMaterial {
@@ -171,6 +213,7 @@ export class MapTile {
 
   // Three.js objects
   private mesh: THREE.Mesh | null = null
+  private outlineMesh: THREE.Mesh | null = null
   private overlapMesh: THREE.Mesh | null = null
   private geometry: THREE.BufferGeometry | null = null
   private overlapGeometry: THREE.BufferGeometry | null = null
@@ -1462,15 +1505,20 @@ export class MapTile {
     // Generate visible geometry
     this.geometry = this.generateVisibleGeometry()
 
+    // Choose material based on cartoon config
+    const material = this.config.cartoon.enabled
+      ? getSharedCartoonMaterial(this.config.cartoon.shading)
+      : getSharedMaterial()
+
     if (this.mesh) {
       // Reuse pooled mesh
       this.mesh.geometry = this.geometry
-      this.mesh.material = getSharedMaterial()
+      this.mesh.material = material
       this.mesh.position.set(this.worldX, 0, this.worldZ)
       this.mesh.visible = true
     } else {
       // Create new mesh
-      this.mesh = new THREE.Mesh(this.geometry, getSharedMaterial())
+      this.mesh = new THREE.Mesh(this.geometry, material)
       this.mesh.position.set(this.worldX, 0, this.worldZ)
     }
 
@@ -1480,6 +1528,23 @@ export class MapTile {
     // Add to scene if not already there
     if (!this.mesh.parent) {
       scene.add(this.mesh)
+    }
+
+    // Create outline mesh if cartoon mode is enabled with outline
+    if (
+      this.config.cartoon.enabled &&
+      this.config.cartoon.outline.enabled &&
+      this.geometry
+    ) {
+      const outlineMaterial = getSharedOutlineMaterial(
+        this.config.cartoon.outline
+      )
+      this.outlineMesh = new THREE.Mesh(this.geometry, outlineMaterial)
+      this.outlineMesh.position.set(this.worldX, 0, this.worldZ)
+      this.outlineMesh.renderOrder = -1 // Render before main mesh
+      this.outlineMesh.castShadow = false
+      this.outlineMesh.receiveShadow = false
+      scene.add(this.outlineMesh)
     }
 
     // Handle overlap visualization
@@ -1509,6 +1574,14 @@ export class MapTile {
       this.mesh = null
     }
 
+    if (this.outlineMesh) {
+      if (this.outlineMesh.parent) {
+        this.outlineMesh.parent.remove(this.outlineMesh)
+      }
+      // Don't dispose geometry as it's shared with main mesh
+      this.outlineMesh = null
+    }
+
     if (this.overlapMesh) {
       if (this.overlapMesh.parent) {
         this.overlapMesh.parent.remove(this.overlapMesh)
@@ -1528,6 +1601,14 @@ export class MapTile {
       }
       this.mesh.geometry.dispose()
       this.mesh = null
+    }
+
+    if (this.outlineMesh) {
+      if (this.outlineMesh.parent) {
+        this.outlineMesh.parent.remove(this.outlineMesh)
+      }
+      // Don't dispose geometry as it's shared with main mesh
+      this.outlineMesh = null
     }
 
     if (this.overlapMesh) {
@@ -1666,6 +1747,14 @@ export class MapTile {
       sharedOverlapMaterial.dispose()
       sharedOverlapMaterial = null
     }
+    if (sharedCartoonMaterial) {
+      sharedCartoonMaterial.dispose()
+      sharedCartoonMaterial = null
+    }
+    if (sharedOutlineMaterial) {
+      sharedOutlineMaterial.dispose()
+      sharedOutlineMaterial = null
+    }
 
     // Clear shared erosion
     sharedErosion = null
@@ -1715,5 +1804,127 @@ export class MapTile {
         }
       }
     }
+  }
+
+  /**
+   * Get current cartoon configuration
+   */
+  public getCartoonConfig(): CartoonConfig {
+    return { ...this.config.cartoon }
+  }
+
+  /**
+   * Update cartoon shading configuration
+   * This updates the shared material, affecting all tiles
+   */
+  public setCartoonShadingConfig(config: Partial<CartoonShadingConfig>): void {
+    this.config.cartoon.shading = { ...this.config.cartoon.shading, ...config }
+    if (sharedCartoonMaterial) {
+      updateCartoonMaterial(sharedCartoonMaterial, config)
+    }
+  }
+
+  /**
+   * Update cartoon outline configuration
+   * This updates the shared material, affecting all tiles
+   */
+  public setCartoonOutlineConfig(config: Partial<CartoonOutlineConfig>): void {
+    this.config.cartoon.outline = { ...this.config.cartoon.outline, ...config }
+    if (sharedOutlineMaterial) {
+      updateOutlineMaterial(sharedOutlineMaterial, config)
+    }
+  }
+
+  /**
+   * Enable or disable cartoon mode
+   * Note: This only affects new tiles or requires reload for existing tiles
+   */
+  public setCartoonEnabled(enabled: boolean, scene: THREE.Scene): void {
+    if (this.config.cartoon.enabled === enabled) return
+
+    this.config.cartoon.enabled = enabled
+
+    if (this.isLoaded && this.mesh && this.geometry) {
+      // Update material
+      if (enabled) {
+        this.mesh.material = getSharedCartoonMaterial(
+          this.config.cartoon.shading
+        )
+
+        // Create outline mesh if needed
+        if (this.config.cartoon.outline.enabled && !this.outlineMesh) {
+          const outlineMaterial = getSharedOutlineMaterial(
+            this.config.cartoon.outline
+          )
+          this.outlineMesh = new THREE.Mesh(this.geometry, outlineMaterial)
+          this.outlineMesh.position.set(this.worldX, 0, this.worldZ)
+          this.outlineMesh.renderOrder = -1
+          this.outlineMesh.castShadow = false
+          this.outlineMesh.receiveShadow = false
+          scene.add(this.outlineMesh)
+        }
+      } else {
+        this.mesh.material = getSharedMaterial()
+
+        // Remove outline mesh
+        if (this.outlineMesh) {
+          if (this.outlineMesh.parent) {
+            this.outlineMesh.parent.remove(this.outlineMesh)
+          }
+          this.outlineMesh = null
+        }
+      }
+    }
+  }
+
+  /**
+   * Enable or disable outline
+   */
+  public setOutlineEnabled(enabled: boolean, scene: THREE.Scene): void {
+    if (this.config.cartoon.outline.enabled === enabled) return
+
+    this.config.cartoon.outline.enabled = enabled
+
+    if (this.isLoaded && this.config.cartoon.enabled && this.geometry) {
+      if (enabled && !this.outlineMesh) {
+        const outlineMaterial = getSharedOutlineMaterial(
+          this.config.cartoon.outline
+        )
+        this.outlineMesh = new THREE.Mesh(this.geometry, outlineMaterial)
+        this.outlineMesh.position.set(this.worldX, 0, this.worldZ)
+        this.outlineMesh.renderOrder = -1
+        this.outlineMesh.castShadow = false
+        this.outlineMesh.receiveShadow = false
+        scene.add(this.outlineMesh)
+      } else if (!enabled && this.outlineMesh) {
+        if (this.outlineMesh.parent) {
+          this.outlineMesh.parent.remove(this.outlineMesh)
+        }
+        this.outlineMesh = null
+      }
+    }
+  }
+
+  /**
+   * Set light direction for cartoon shading
+   */
+  public static setCartoonLightDirection(direction: THREE.Vector3): void {
+    if (sharedCartoonMaterial) {
+      setCartoonLightDirection(sharedCartoonMaterial, direction)
+    }
+  }
+
+  /**
+   * Get current shared cartoon material (for external access)
+   */
+  public static getSharedCartoonMaterial(): THREE.ShaderMaterial | null {
+    return sharedCartoonMaterial
+  }
+
+  /**
+   * Get current shared outline material (for external access)
+   */
+  public static getSharedOutlineMaterial(): THREE.ShaderMaterial | null {
+    return sharedOutlineMaterial
   }
 }

@@ -1,3 +1,4 @@
+import { DEFAULT_CARTOON_CONFIG } from './CartoonMaterial'
 import { TileManager } from './TileManager'
 import { CameraController } from './camera-controller'
 import { DEFAULT_TERRAIN_PAINTER_CONFIG } from './terrain-painter'
@@ -18,6 +19,24 @@ export {
   DEFAULT_TERRAIN_PAINTER_CONFIG,
 } from './terrain-painter'
 export type { TerrainPainterConfig, ColorRule } from './terrain-painter'
+
+// Cartoon shader exports
+export {
+  createCartoonMaterial,
+  createOutlineMaterial,
+  updateCartoonMaterial,
+  updateOutlineMaterial,
+  setCartoonLightDirection,
+  CartoonMeshGroup,
+  DEFAULT_CARTOON_CONFIG,
+  DEFAULT_OUTLINE_CONFIG,
+  DEFAULT_SHADING_CONFIG,
+} from './CartoonMaterial'
+export type {
+  CartoonConfig,
+  CartoonOutlineConfig,
+  CartoonShadingConfig,
+} from './CartoonMaterial'
 
 export class Map {
   public static scene: THREE.Scene
@@ -71,7 +90,7 @@ export class Map {
         rotateSpeed: 0.3,
         minZoom: 5,
         maxZoom: 100,
-        minPitch: 15, // Minimum angle from horizontal
+        minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
         initialPitch: 15, // Start at 45 degrees
         initialYaw: 0, // Start facing north
@@ -103,6 +122,7 @@ export class Map {
         overlapSegments: 16, // Overlap with neighbors (for seamless erosion)
         showOverlap: false, // Set to true to visualize overlap areas
         painter: DEFAULT_TERRAIN_PAINTER_CONFIG, // Terrain painting configuration
+        cartoon: DEFAULT_CARTOON_CONFIG, // Cartoon shader configuration
       },
       loadDistance: 4,
       unloadDistance: 6,
