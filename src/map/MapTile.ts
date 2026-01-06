@@ -966,8 +966,9 @@ export class MapTile {
     if (!this.mesh || !this.heightMap) return
 
     const { segments, overlapSegments } = this.config
+    const seg = segments
     const virtualVertexCount = this.virtualVertexCount
-    const visibleVertexCount = segments + 1
+    const visibleVertexCount = seg + 1
 
     // Get position attribute
     const positionAttribute = this.mesh.geometry.getAttribute('position')
@@ -987,12 +988,26 @@ export class MapTile {
       }
     }
 
-    positionAttribute.needsUpdate = true
-
     // Compute normals with neighbor awareness for smooth borders
     // Uncomment below line and comment computeVertexNormals() for smooth tile borders:
     // this.computeNormalsWithNeighbors()
     this.mesh.geometry.computeVertexNormals()
+
+    for (let i = 0; i < visibleVertexCount; i++) {
+      for (let j = 0; j < visibleVertexCount; j++) {
+        const vertexIndex = (i * visibleVertexCount + j) * 3
+        if (
+          i == 0 ||
+          j == 0 ||
+          i == visibleVertexCount - 1 ||
+          j == visibleVertexCount - 1
+        ) {
+          // positions[vertexIndex + 1] -= 10
+        }
+      }
+    }
+
+    positionAttribute.needsUpdate = true
 
     // Recalculate vertex colors after blending
     const normals = this.mesh.geometry.getAttribute('normal')
@@ -1000,7 +1015,7 @@ export class MapTile {
     const visibleErosionResult = this.extractVisibleErosionResult()
     const visibleHeightMap = this.extractVisibleHeightMap(
       this.heightMap,
-      segments,
+      seg,
       overlapSegments,
       virtualVertexCount
     )
@@ -1009,7 +1024,7 @@ export class MapTile {
       visibleHeightMap,
       normals,
       visibleErosionResult,
-      segments,
+      seg,
       this.config.heightScale
     )
 
@@ -1275,8 +1290,9 @@ export class MapTile {
 
     const heightMap = this.heightMap || this.generateHeightMap()
     const { size, segments, overlapSegments } = this.config
+    const seg = segments
     const virtualVertexCount = this.virtualVertexCount
-    const visibleVertexCount = segments + 1
+    const visibleVertexCount = seg + 1
 
     // Create vertices for visible area
     const vertices = new Float32Array(
@@ -1304,11 +1320,11 @@ export class MapTile {
     }
 
     // Create indices
-    const indices = new Uint32Array(segments * segments * 6)
+    const indices = new Uint32Array(seg * seg * 6)
     let indexOffset = 0
 
-    for (let i = 0; i < segments; i++) {
-      for (let j = 0; j < segments; j++) {
+    for (let i = 0; i < seg; i++) {
+      for (let j = 0; j < seg; j++) {
         const a = i * visibleVertexCount + j
         const b = i * visibleVertexCount + j + 1
         const c = (i + 1) * visibleVertexCount + j
@@ -1340,13 +1356,13 @@ export class MapTile {
     const colors = this.painter.calculateVertexColors(
       this.extractVisibleHeightMap(
         heightMap,
-        segments,
+        seg,
         overlapSegments,
         virtualVertexCount
       ),
       normals,
       visibleErosionResult,
-      segments,
+      seg,
       this.config.heightScale
     )
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))

@@ -92,9 +92,9 @@ export class Map {
         maxZoom: 100,
         minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 15, // Start at 45 degrees
+        initialPitch: 70, // Start at 45 degrees
         initialYaw: 0, // Start facing north
-        isometric: true, // Set to true for isometric projection
+        isometric: false, // Set to true for isometric projection
         isometricScale: 30, // Scale factor for isometric view
       }
     )
@@ -124,8 +124,8 @@ export class Map {
         painter: DEFAULT_TERRAIN_PAINTER_CONFIG, // Terrain painting configuration
         cartoon: DEFAULT_CARTOON_CONFIG, // Cartoon shader configuration
       },
-      loadDistance: 4,
-      unloadDistance: 6,
+      loadDistance: 2,
+      unloadDistance: 4,
       maxTilesPerFrame: 1, // Reduced due to erosion processing time
       maxBlendsPerFrame: 2, // Max blend operations per frame
     })
