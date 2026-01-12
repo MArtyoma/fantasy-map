@@ -93,7 +93,7 @@ export class Map {
         maxZoom: 200,
         minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 60, // Start at 45 degrees
+        initialPitch: 50, // Start at 45 degrees
         initialYaw: 0, // Start facing north
         isometric: false, // Set to true for isometric projection
         isometricScale: 30, // Scale factor for isometric view
@@ -105,7 +105,7 @@ export class Map {
       tileConfig: {
         map: deserializeFloat32Array(localStorage.getItem('map') ?? ''),
         width: 512,
-        sizeScale: 32,
+        sizeScale: 16,
         size: 32,
         segments: 64,
         noiseScale: 32,
@@ -129,7 +129,7 @@ export class Map {
         cartoon: DEFAULT_CARTOON_CONFIG, // Cartoon shader configuration
       },
       loadDistance: 8,
-      unloadDistance: 16,
+      unloadDistance: 64,
       maxTilesPerFrame: 3, // Reduced due to erosion processing time
       maxBlendsPerFrame: 6, // Max blend operations per frame
     })

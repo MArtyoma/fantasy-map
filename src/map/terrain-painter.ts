@@ -91,7 +91,7 @@ export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
     // High peaks (snow/rock)
     {
       color: 0xd3d3d3, // Light gray
-      minHeight: 8.0,
+      minHeight: 14.0,
       maxHeight: 200.0,
       blendWeight: 0.9,
     },

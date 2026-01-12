@@ -47,6 +47,9 @@ export class TileManager {
     this.scene = scene
     this.config = { ...DEFAULT_MANAGER_CONFIG, ...config }
 
+    MapTile.initOverLapIndexes(this.config.tileConfig)
+    MapTile.initIndices(this.config.tileConfig)
+
     if (config.tileConfig) {
       this.config.tileConfig = { ...DEFAULT_TILE_CONFIG, ...config.tileConfig }
     }
@@ -308,47 +311,6 @@ export class TileManager {
       }
     }
     this.pendingBlends.clear()
-  }
-
-  // Get tile at world position
-  public getTileAt(worldX: number, worldZ: number): MapTile | null {
-    const [tileX, tileZ] = this.worldToTile(worldX, worldZ)
-    return this.tiles.get(this.getTileKey(tileX, tileZ)) || null
-  }
-
-  // Get height at world position
-  public getHeightAt(worldX: number, worldZ: number): number | null {
-    const tile = this.getTileAt(worldX, worldZ)
-    if (!tile || !tile.loaded) return null
-    return tile.getHeightAt(worldX, worldZ)
-  }
-
-  // Get statistics
-  public getStats(): {
-    loadedTiles: number
-    totalTiles: number
-    pendingLoads: number
-    pendingUnloads: number
-    pendingBlends: number
-    cacheStats: ReturnType<typeof MapTile.getCacheStats>
-  } {
-    return {
-      loadedTiles: this.loadedCount,
-      totalTiles: this.tiles.size,
-      pendingLoads: this.pendingLoads.length,
-      pendingUnloads: this.pendingUnloads.length,
-      pendingBlends: this.pendingBlends.size,
-      cacheStats: MapTile.getCacheStats(),
-    }
-  }
-
-  // Set load/unload distances
-  public setDistances(loadDistance: number, unloadDistance: number): void {
-    this.config.loadDistance = loadDistance
-    this.config.unloadDistance = Math.max(unloadDistance, loadDistance + 1)
-
-    // Recalculate pending operations
-    this.calculatePendingOperations(this.lastCameraTileX, this.lastCameraTileZ)
   }
 
   // Dispose all tiles and clear caches
