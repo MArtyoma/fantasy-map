@@ -1,3 +1,4 @@
+import { deserializeFloat32Array } from '../utils'
 import { DEFAULT_CARTOON_CONFIG } from './CartoonMaterial'
 import { TileManager } from './TileManager'
 import { CameraController } from './camera-controller'
@@ -74,7 +75,7 @@ export class Map {
 
     Map.renderer.toneMapping = THREE.CineonToneMapping
     Map.renderer.toneMappingExposure = 1.75
-    Map.renderer.shadowMap.enabled = true
+    Map.renderer.shadowMap.enabled = false
     Map.renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
     this.container.appendChild(Map.renderer.domElement)
@@ -84,15 +85,15 @@ export class Map {
       Map.perspectiveCamera,
       Map.renderer.domElement,
       {
-        moveSpeed: 10,
+        moveSpeed: 20,
         dragSpeed: 0.01,
         zoomSpeed: 2,
         rotateSpeed: 0.3,
         minZoom: 5,
-        maxZoom: 100,
+        maxZoom: 200,
         minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 70, // Start at 45 degrees
+        initialPitch: 60, // Start at 45 degrees
         initialYaw: 0, // Start facing north
         isometric: false, // Set to true for isometric projection
         isometricScale: 30, // Scale factor for isometric view
@@ -102,6 +103,9 @@ export class Map {
     // Initialize tile manager
     Map.tileManager = new TileManager(Map.scene, {
       tileConfig: {
+        map: deserializeFloat32Array(localStorage.getItem('map') ?? ''),
+        width: 512,
+        sizeScale: 32,
         size: 32,
         segments: 64,
         noiseScale: 32,
@@ -124,10 +128,10 @@ export class Map {
         painter: DEFAULT_TERRAIN_PAINTER_CONFIG, // Terrain painting configuration
         cartoon: DEFAULT_CARTOON_CONFIG, // Cartoon shader configuration
       },
-      loadDistance: 2,
-      unloadDistance: 4,
-      maxTilesPerFrame: 1, // Reduced due to erosion processing time
-      maxBlendsPerFrame: 2, // Max blend operations per frame
+      loadDistance: 8,
+      unloadDistance: 16,
+      maxTilesPerFrame: 3, // Reduced due to erosion processing time
+      maxBlendsPerFrame: 6, // Max blend operations per frame
     })
 
     // Initial tile load
@@ -156,7 +160,7 @@ export class Map {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
     directionalLight.position.set(10, 10, 5)
-    directionalLight.castShadow = true
+    directionalLight.castShadow = false
     directionalLight.shadow.mapSize.width = 4096
     directionalLight.shadow.mapSize.height = 4096
     Map.scene.add(directionalLight)
@@ -169,6 +173,16 @@ export class Map {
    * Add basic 3D geometry to demonstrate the scene
    */
   private addBasicGeometry(): void {
+    // const geometry = new THREE.PlaneGeometry(5, 5) // width = 5, height = 5
+    // const material = new THREE.MeshBasicMaterial({
+    //   color: 0x4aabe9,
+    //   side: THREE.DoubleSide,
+    // })
+    // const plane = new THREE.Mesh(geometry, material)
+    // plane.scale.set(1000, 1000, 1000)
+    // plane.position.set(0, 0.01, 0)
+    // plane.rotation.x = Math.PI / 2
+    // Map.scene.add(plane)
     // const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x888888)
     // Map.scene.add(gridHelper)
     // const axesHelper = new THREE.AxesHelper(5)

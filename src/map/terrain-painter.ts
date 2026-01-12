@@ -54,12 +54,21 @@ export interface TerrainPainterConfig {
 export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
   baseColor: 0x4a7c4e, // Green grass
   rules: [
+    // Water
+    {
+      color: 0x4aabe9, // Water
+      maxHeight: 0.01,
+      // minFlow: 0.3,
+      blendWeight: 1,
+    },
     // Deep valleys (low height + high flow)
     {
       color: 0x3a5a3e, // Dark green
+      minHeight: 0.021,
       maxHeight: 0.3,
       minFlow: 0.3,
-      blendWeight: 0.8,
+      blendWeight: 1,
+      // blendWeight: 0.8,
     },
     // Rocky slopes
     {
@@ -82,7 +91,7 @@ export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
     // High peaks (snow/rock)
     {
       color: 0xd3d3d3, // Light gray
-      minHeight: 5.0,
+      minHeight: 8.0,
       maxHeight: 200.0,
       blendWeight: 0.9,
     },

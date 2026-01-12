@@ -1,3 +1,4 @@
+import { deserializeFloat32Array, fillMatrix2WithInterpolation } from '../utils'
 import { Erosion, type ErosionResult } from '../utils/erosion'
 import { PerlinNoise } from '../utils/perlin-noise'
 import {
@@ -65,6 +66,9 @@ export interface ErosionConfig {
 
 // Tile configuration
 export interface TileConfig {
+  map: Float32Array
+  width: number
+  sizeScale: number
   size: number // World size of tile
   segments: number // Number of segments per side (visible)
   noiseScale: number // Scale for noise generation
@@ -93,6 +97,9 @@ export const DEFAULT_EROSION_CONFIG: ErosionConfig = {
 
 // Default configuration
 export const DEFAULT_TILE_CONFIG: TileConfig = {
+  map: new Float32Array(0),
+  width: 1,
+  sizeScale: 1,
   size: 32,
   segments: 64,
   noiseScale: 8,
@@ -221,6 +228,12 @@ export class MapTile {
   // Heightmap data (cached, includes overlap)
   private heightMap: Float32Array | null = null
 
+  // Mask for noise end erosion
+  private maskHeight: Float32Array = new Float32Array(0)
+
+  // Mask average
+  private maskAvg: number = 0
+
   // Erosion result data (for terrain painting)
   private erosionResult: ErosionResult | null = null
 
@@ -249,6 +262,7 @@ export class MapTile {
     this.tileZ = tileZ
     this.config = config
     this.painter = new TerrainPainter(config.painter)
+    this.getHeightDelt()
   }
 
   // Get unique key for this tile
@@ -398,8 +412,46 @@ export class MapTile {
     )
   }
 
+  private getHeightDelt() {
+    const x =
+      (this.tileX + this.config.width / (2 * this.config.sizeScale)) *
+      this.config.sizeScale
+    const y =
+      (this.tileZ + this.config.width / (2 * this.config.sizeScale)) *
+      this.config.sizeScale
+
+    this.maskHeight = new Float32Array(this.virtualVertexCount ** 2)
+
+    if (x < 0 || y < 0 || x > this.config.width || y > this.config.width) {
+      for (let i = 0; i < this.maskHeight.length; i++) {
+        this.maskHeight[i] = 0
+      }
+      this.maskAvg = 0
+
+      return
+    }
+
+    fillMatrix2WithInterpolation(
+      this.config.map,
+      this.config.width,
+      this.maskHeight,
+      this.virtualVertexCount,
+      x,
+      y,
+      this.config.sizeScale
+    )
+
+    for (let i = 0; i < this.maskHeight.length; i++) {
+      this.maskAvg += this.maskHeight[i]
+    }
+    this.maskAvg /= this.maskHeight.length
+  }
+
   // Generate raw heightmap without erosion (cached, includes overlap)
   private generateRawHeightMap(): Float32Array {
+    if (this.maskAvg === 0) {
+      return new Float32Array(this.virtualVertexCount ** 2).fill(0)
+    }
     // Check cache first
     const cached = heightMapCache.get(this.key)
     if (cached) {
@@ -422,11 +474,23 @@ export class MapTile {
         // World X coordinate (starts before visible tile due to overlap)
         const x = this.virtualWorldX + j * segmentSize
 
+        const index = i * virtualVertexCount + j
+        // if (this.maskHeight[index] < 0.01) {
+        //   heightMap[index] = 0
+        // }
+
         // Use world coordinates for seamless noise
         const height =
-          noise.fractalNoise2D(x / noiseScale, z / noiseScale) * heightScale
+          ((noise.fractalNoise2D(x / noiseScale, z / noiseScale) + 1) / 2) *
+          heightScale
 
-        heightMap[i * virtualVertexCount + j] = height
+        heightMap[index] =
+          this.maskHeight[index] * 8 + height * this.maskHeight[index]
+
+        // heightMap[index] = height * this.maskHeight[index] * 1.5
+        if (heightMap[index] < 0.01) {
+          heightMap[index] = 0
+        }
       }
     }
 
@@ -474,7 +538,7 @@ export class MapTile {
       erodedMap,
       virtualVertexCount,
       virtualVertexCount,
-      erosionConfig.iterations
+      erosionConfig.iterations * this.maskAvg
     )
 
     // Cache the eroded heightmap and erosion result
@@ -1538,8 +1602,8 @@ export class MapTile {
       this.mesh.position.set(this.worldX, 0, this.worldZ)
     }
 
-    this.mesh.castShadow = true
-    this.mesh.receiveShadow = true
+    this.mesh.castShadow = false
+    this.mesh.receiveShadow = false
 
     // Add to scene if not already there
     if (!this.mesh.parent) {
