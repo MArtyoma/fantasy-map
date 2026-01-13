@@ -96,7 +96,7 @@ export class Map {
         maxZoom: 200,
         minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 40, // Start at 45 degrees
+        initialPitch: 60, // Start at 45 degrees
         initialYaw: 0, // Start facing north
         isometric: false, // Set to true for isometric projection
         isometricScale: 60, // Scale factor for isometric view
