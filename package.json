@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "eslint-define-config": "^2.1.0",
+    "lil-gui": "^0.21.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "three": "^0.182.0"

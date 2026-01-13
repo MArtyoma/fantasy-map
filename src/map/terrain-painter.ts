@@ -57,13 +57,14 @@ export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
     // Water
     {
       color: 0x4aabe9, // Water
-      maxHeight: 0.01,
+      minHeight: -10,
+      maxHeight: -1,
       // minFlow: 0.3,
       blendWeight: 1,
     },
     // Deep valleys (low height + high flow)
     {
-      color: 0x3a5a3e, // Dark green
+      color: 0xf2b705, // 0x3a5a3e, // Dark green
       minHeight: 0.021,
       maxHeight: 0.3,
       minFlow: 0.3,
@@ -72,32 +73,32 @@ export const DEFAULT_TERRAIN_PAINTER_CONFIG: TerrainPainterConfig = {
     },
     // Rocky slopes
     {
-      color: 0x808080, // Gray rock
+      color: 0xcdd9a3, // 0x808080, // Gray rock
       minSlope: 0.5,
       blendWeight: 1.0,
     },
     // Eroded areas (brownish)
     {
-      color: 0x8b7355, // Brown dirt
+      color: 0x9ebf56, // 0x8b7355, // Brown dirt
       minErosion: 0.2,
       blendWeight: 0.7,
     },
     // Deposit areas (lighter)
     {
-      color: 0x9acd32, // Yellow-green
+      color: 0x89a65d, // 0x9acd32, // Yellow-green
       minDeposit: 0.3,
       blendWeight: 0.5,
     },
     // High peaks (snow/rock)
     {
-      color: 0xd3d3d3, // Light gray
+      color: 0xffffff, // 0xd3d3d3, // Light gray
       minHeight: 14.0,
       maxHeight: 200.0,
       blendWeight: 0.9,
     },
     // Steep cliffs
     {
-      color: 0x696969, // Dark gray
+      color: 0xba8e7a, // 0x696969, // Dark gray
       minSlope: 0.7,
       blendWeight: 1.0,
     },

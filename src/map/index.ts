@@ -1,4 +1,5 @@
 import { deserializeFloat32Array } from '../utils'
+import { OutlineEffect } from '../utils/outline'
 import { DEFAULT_CARTOON_CONFIG } from './CartoonMaterial'
 import { TileManager } from './TileManager'
 import { CameraController } from './camera-controller'
@@ -49,6 +50,8 @@ export class Map {
   private animationFrameId: number | null = null
 
   private container: HTMLElement
+
+  private effect: OutlineEffect
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -134,6 +137,8 @@ export class Map {
       maxBlendsPerFrame: 6, // Max blend operations per frame
     })
 
+    this.effect = new OutlineEffect(Map.renderer)
+
     // Initial tile load
     const activeCamera = Map.cameraController.getActiveCamera()
     Map.tileManager.forceLoadAll(
@@ -143,7 +148,7 @@ export class Map {
 
     this.addLighting()
 
-    this.addBasicGeometry()
+    // this.addBasicGeometry()
 
     this.setupResizeHandler()
 
@@ -173,6 +178,55 @@ export class Map {
    * Add basic 3D geometry to demonstrate the scene
    */
   private addBasicGeometry(): void {
+    const cubeWidth = 400
+    const numberOfSpheresPerSide = 5
+    const sphereRadius = (cubeWidth / numberOfSpheresPerSide) * 0.8 * 0.5
+    const stepSize = 1.0 / numberOfSpheresPerSide
+
+    const geometry = new THREE.SphereGeometry(sphereRadius, 32, 16)
+
+    for (
+      let alpha = 0, alphaIndex = 0;
+      alpha <= 1.0;
+      alpha += stepSize, alphaIndex++
+    ) {
+      const colors = new Uint8Array(alphaIndex + 2)
+
+      for (let c = 0; c <= colors.length; c++) {
+        colors[c] = (c / colors.length) * 256
+      }
+
+      const gradientMap = new THREE.DataTexture(
+        colors,
+        colors.length,
+        1,
+        THREE.RedFormat
+      )
+      gradientMap.needsUpdate = true
+
+      for (let beta = 0; beta <= 1.0; beta += stepSize) {
+        for (let gamma = 0; gamma <= 1.0; gamma += stepSize) {
+          // basic monochromatic energy preservation
+          const diffuseColor = new THREE.Color()
+            .setHSL(alpha, 0.5, gamma * 0.5 + 0.1)
+            .multiplyScalar(1 - beta * 0.2)
+
+          const material = new THREE.MeshToonMaterial({
+            color: diffuseColor,
+            gradientMap: gradientMap,
+          })
+
+          const mesh = new THREE.Mesh(geometry, material)
+
+          mesh.position.x = alpha * 400 - 200
+          mesh.position.y = beta * 400 - 200
+          mesh.position.z = gamma * 400 - 200
+
+          Map.scene.add(mesh)
+        }
+      }
+    }
+
     // const geometry = new THREE.PlaneGeometry(5, 5) // width = 5, height = 5
     // const material = new THREE.MeshBasicMaterial({
     //   color: 0x4aabe9,
@@ -227,7 +281,8 @@ export class Map {
     // Update tile manager with camera position
     Map.tileManager.update(activeCamera.position.x, activeCamera.position.z)
 
-    Map.renderer.render(Map.scene, activeCamera)
+    this.effect.render(Map.scene, activeCamera)
+    // Map.renderer.render(Map.scene, activeCamera)
   }
 
   /**

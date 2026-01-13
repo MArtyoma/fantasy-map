@@ -144,7 +144,7 @@ function getSharedErosion(): Erosion {
 }
 
 // Shared materials
-let sharedMaterial: THREE.MeshStandardMaterial | null = null
+let sharedMaterial: THREE.MeshToonMaterial | null = null
 let sharedOverlapMaterial: THREE.MeshStandardMaterial | null = null
 let sharedCartoonMaterial: THREE.ShaderMaterial | null = null
 let sharedOutlineMaterial: THREE.ShaderMaterial | null = null
@@ -152,16 +152,80 @@ let sharedOutlineMaterial: THREE.ShaderMaterial | null = null
 // Current cartoon config for shared materials
 let currentCartoonConfig: CartoonConfig = DEFAULT_CARTOON_CONFIG
 
-function getSharedMaterial(): THREE.MeshStandardMaterial {
+function getSharedMaterial(): THREE.MeshToonMaterial {
   if (!sharedMaterial) {
-    sharedMaterial = new THREE.MeshStandardMaterial({
-      vertexColors: true, // Enable vertex colors
-      side: THREE.DoubleSide,
-      wireframe: false,
-      flatShading: false,
-    })
+    sharedMaterial = new THREE.MeshToonMaterial({ vertexColors: true })
+
+    sharedMaterial.onBeforeCompile = (shader) => {
+      return
+      // Сохраняем ссылку на шейдер, чтобы мы могли менять uniforms позже
+      // --- ДОБАВЛЕНИЕ UNIFORMS ---
+      // Добавляем наши переменные в шейдер
+      shader.uniforms.uLevel = { value: -0.3 } // Высота линии
+      shader.uniforms.uThickness = { value: 0.15 } // Толщина линии
+      shader.uniforms.uOutlineColor = { value: new THREE.Color(0x000000) } // Цвет линии
+
+      // --- ВЕРШИННЫЙ ШЕДЕР (VERTEX SHADER) ---
+      // Нам нужно передать мировые координаты во фрагментный шейдер.
+      // Мы объявляем varying и вычисляем позицию.
+
+      shader.vertexShader = `
+        varying vec3 vWorldPosition;
+        ${shader.vertexShader}
+    `
+
+      // Вставляем вычисление позиции после стандартных трансформаций Three.js
+      // Мы заменяем блок #include <begin_vertex>, чтобы добавить расчет vWorldPosition
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `
+        #include <begin_vertex>
+        // Вычисляем мировую позицию вершины
+        vec4 worldPosition = modelMatrix * vec4(transformed, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        `
+      )
+
+      // --- ФРАГМЕНТНЫЙ ШЕДЕР (FRAGMENT SHADER) ---
+      // Добавляем объявление uniform и varying
+
+      shader.fragmentShader = `
+        uniform float uLevel;
+        uniform float uThickness;
+        uniform vec3 uOutlineColor;
+        varying vec3 vWorldPosition;
+        ${shader.fragmentShader}
+    `
+
+      // Внедряем логику отрисовки линии в самом конце шейдера
+      // #include <dithering_fragment> — это обычно последний шаг перед выводом цвета
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `
+        #include <dithering_fragment>
+        
+        // Логика линии уровня
+        float dist = abs(vWorldPosition.y - uLevel);
+        float lineAlpha = 1.0 - smoothstep(0.0, uThickness, dist);
+        
+        // Смешиваем цвет Toon материала (gl_FragColor) с цветом линии
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, uOutlineColor, lineAlpha);
+        `
+      )
+    }
   }
+
   return sharedMaterial
+
+  // if (!sharedMaterial) {
+  //   sharedMaterial = new THREE.MeshStandardMaterial({
+  //     vertexColors: true, // Enable vertex colors
+  //     side: THREE.DoubleSide,
+  //     wireframe: false,
+  //     flatShading: false,
+  //   })
+  // }
+  // return sharedMaterial
 }
 
 function getSharedCartoonMaterial(
@@ -238,20 +302,20 @@ export class MapTile {
 
         if (index % 2 === 0) {
           indices[indexOffset++] = a
-          indices[indexOffset++] = b
           indices[indexOffset++] = d
+          indices[indexOffset++] = b
 
           indices[indexOffset++] = a
-          indices[indexOffset++] = d
           indices[indexOffset++] = c
+          indices[indexOffset++] = d
         } else {
           indices[indexOffset++] = c
-          indices[indexOffset++] = a
           indices[indexOffset++] = b
+          indices[indexOffset++] = a
 
           indices[indexOffset++] = c
-          indices[indexOffset++] = b
           indices[indexOffset++] = d
+          indices[indexOffset++] = b
         }
       }
     }
@@ -581,9 +645,10 @@ export class MapTile {
         const x = this.virtualWorldX + j * segmentSize
 
         const index = i * virtualVertexCount + j
-        // if (this.maskHeight[index] < 0.01) {
-        //   heightMap[index] = 0
-        // }
+        if (this.maskHeight[index] < 0.1) {
+          heightMap[index] = -1
+          continue
+        }
 
         // Use world coordinates for seamless noise
         const height =
@@ -682,52 +747,12 @@ export class MapTile {
     )
   }
 
-  // Get height from neighbor's ORIGINAL heightmap at exact grid position
-  // Returns null if neighbor doesn't have this point
-  private getNeighborOriginalHeight(
-    neighbor: MapTile,
-    visibleI: number,
-    visibleJ: number
-  ): number | null {
-    const neighborOriginal = neighbor.getOriginalHeightMap()
-    if (!neighborOriginal) return null
-
-    const { segments, overlapSegments } = this.config
-
-    // Calculate where this vertex is in neighbor's grid
-    // Our visible (i,j) -> world position -> neighbor's virtual (ni, nj)
-
-    // Direction from us to neighbor
-    const dx = neighbor.tileX - this.tileX
-    const dz = neighbor.tileZ - this.tileZ
-
-    // Calculate corresponding position in neighbor's virtual grid
-    // If neighbor is to the East (dx=1), our j=segments corresponds to their j=0
-    // Our visible vertex (i,j) in neighbor's virtual coordinates:
-    let neighborVirtualJ = visibleJ - dx * segments + overlapSegments
-    let neighborVirtualI = visibleI - dz * segments + overlapSegments
-
-    const vvc = neighbor.virtualVertexCount
-
-    // Check bounds
-    if (
-      neighborVirtualI < 0 ||
-      neighborVirtualI >= vvc ||
-      neighborVirtualJ < 0 ||
-      neighborVirtualJ >= vvc
-    ) {
-      return null
-    }
-
-    return neighborOriginal[neighborVirtualI * vvc + neighborVirtualJ]
-  }
-
   // Blend heightmap with neighbors at borders - EXACT vertex matching
   public blendWithNeighbors(): boolean {
     if (!this.heightMap || !this.isLoaded) return false
     if (this.blendVersion === this.lastBlendVersion) return false
 
-    const { segments, overlapSegments } = this.config
+    const { overlapSegments } = this.config
     if (overlapSegments === 0) {
       this.needsBlending = false
       this.lastBlendVersion = this.blendVersion
@@ -782,6 +807,10 @@ export class MapTile {
     this.needsBlending = false
     this.lastBlendVersion = this.blendVersion
 
+    if (this.mesh) {
+      this.mesh.visible = true
+    }
+
     return true
   }
 
@@ -823,7 +852,11 @@ export class MapTile {
           i == visibleVertexCount - 1 ||
           j == visibleVertexCount - 1
         ) {
-          positions[vertexIndex + 1] -= 0.5
+          if (positions[vertexIndex + 1] < 0.2) {
+            positions[vertexIndex + 1] -= 5
+          } else {
+            positions[vertexIndex + 1] -= 0.01
+          }
         }
       }
     }
@@ -1075,6 +1108,15 @@ export class MapTile {
 
   // Load tile (create mesh and add to scene)
   public load(scene: THREE.Scene): void {
+    const x =
+      (this.tileX + this.config.width / (2 * this.config.sizeScale)) *
+      this.config.sizeScale
+    const y =
+      (this.tileZ + this.config.width / (2 * this.config.sizeScale)) *
+      this.config.sizeScale
+
+    if (x < 0 || y < 0 || x > this.config.width || y > this.config.width) return
+
     if (this.isLoaded || this.isGenerating) return
 
     this.isGenerating = true
@@ -1107,9 +1149,11 @@ export class MapTile {
 
     this.mesh.castShadow = false
     this.mesh.receiveShadow = false
+    // this.mesh.userData.ignoreOutline = true
 
     // Add to scene if not already there
     if (!this.mesh.parent) {
+      this.mesh.visible = false
       scene.add(this.mesh)
     }
 
