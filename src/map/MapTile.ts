@@ -157,7 +157,6 @@ function getSharedMaterial(): THREE.MeshToonMaterial {
     sharedMaterial = new THREE.MeshToonMaterial({ vertexColors: true })
 
     sharedMaterial.onBeforeCompile = (shader) => {
-      return
       // Сохраняем ссылку на шейдер, чтобы мы могли менять uniforms позже
       // --- ДОБАВЛЕНИЕ UNIFORMS ---
       // Добавляем наши переменные в шейдер

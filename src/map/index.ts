@@ -63,7 +63,7 @@ export class Map {
       75,
       this.container.clientWidth / this.container.clientHeight,
       0.1,
-      1000
+      4000
     )
     // Position camera above and looking down
     Map.perspectiveCamera.position.set(0, 25, 0)
@@ -96,10 +96,10 @@ export class Map {
         maxZoom: 200,
         minPitch: 45, // Minimum angle from horizontal
         maxPitch: 90, // Maximum angle (looking straight down)
-        initialPitch: 50, // Start at 45 degrees
+        initialPitch: 40, // Start at 45 degrees
         initialYaw: 0, // Start facing north
         isometric: false, // Set to true for isometric projection
-        isometricScale: 30, // Scale factor for isometric view
+        isometricScale: 60, // Scale factor for isometric view
       }
     )
 

@@ -523,7 +523,7 @@ export class CameraController {
 
     if (this._isIsometric) {
       // For orthographic camera, position it far away and use scale for zoom
-      const orthoDistance = 200 // Fixed far distance
+      const orthoDistance = 500 // Fixed far distance
 
       const orthoHorizontalDist = orthoDistance * Math.cos(pitchRad)
       const orthoVerticalDist = orthoDistance * Math.sin(pitchRad)
