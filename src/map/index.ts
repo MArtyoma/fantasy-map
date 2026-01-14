@@ -5,6 +5,9 @@ import { TileManager } from './TileManager'
 import { CameraController } from './camera-controller'
 import { DEFAULT_TERRAIN_PAINTER_CONFIG } from './terrain-painter'
 import * as THREE from 'three'
+import Stats from 'three/addons/libs/stats.module.js'
+
+let stats
 
 export {
   MapTile,
@@ -82,6 +85,8 @@ export class Map {
     Map.renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
     this.container.appendChild(Map.renderer.domElement)
+    stats = new Stats()
+    this.container.appendChild(stats.dom)
 
     // Use custom camera controller for WASD + mouse + scroll control
     Map.cameraController = new CameraController(
@@ -271,6 +276,7 @@ export class Map {
    * Animation loop - called every frame
    */
   private animate(): void {
+    stats.begin()
     this.animationFrameId = requestAnimationFrame(() => this.animate())
 
     Map.cameraController.update()
@@ -282,6 +288,7 @@ export class Map {
     Map.tileManager.update(activeCamera.position.x, activeCamera.position.z)
 
     this.effect.render(Map.scene, activeCamera)
+    stats.end()
     // Map.renderer.render(Map.scene, activeCamera)
   }
 

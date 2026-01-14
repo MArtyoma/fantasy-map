@@ -146,7 +146,7 @@ function getSharedErosion(): Erosion {
 // Shared materials
 let sharedMaterial: THREE.MeshToonMaterial | null = null
 let sharedOverlapMaterial: THREE.MeshStandardMaterial | null = null
-let sharedCartoonMaterial: THREE.ShaderMaterial | null = null
+let sharedCartoonMaterial: THREE.MeshToonMaterial | null = null
 let sharedOutlineMaterial: THREE.ShaderMaterial | null = null
 
 // Current cartoon config for shared materials
@@ -227,12 +227,22 @@ function getSharedMaterial(): THREE.MeshToonMaterial {
   // return sharedMaterial
 }
 
-function getSharedCartoonMaterial(
-  config: CartoonShadingConfig = DEFAULT_SHADING_CONFIG
-): THREE.ShaderMaterial {
+function getTreeMaterial(): THREE.MeshToonMaterial {
   if (!sharedCartoonMaterial) {
-    sharedCartoonMaterial = createCartoonMaterial(config)
-    currentCartoonConfig.shading = config
+    sharedCartoonMaterial = new THREE.MeshToonMaterial({
+      color: 0xf2b705,
+      side: THREE.DoubleSide,
+    })
+
+    // sharedCartoonMaterial = new THREE.MeshStandardMaterial({
+    //   color: 0x00ff00,
+    //   side: THREE.DoubleSide,
+    //   wireframe: false,
+    //   flatShading: false,
+    // })
+
+    // sharedCartoonMaterial = createCartoonMaterial(config)
+    // currentCartoonConfig.shading = config
   }
   return sharedCartoonMaterial
 }
@@ -282,6 +292,8 @@ export class MapTile {
   public static blendArr: Array<Array<Array<number>>> = []
 
   public static indices: Float32Array
+
+  private treeMap: Float32Array = new Float32Array()
 
   public static initIndices = (config: TileConfig) => {
     const { segments } = config
@@ -813,6 +825,73 @@ export class MapTile {
     return true
   }
 
+  private createTreeMap(treeIndex: number) {
+    if (!this.mesh || !this.heightMap || !this.mesh.visible) return
+
+    const vertPerTree = 4
+    const vertices = new Float32Array(treeIndex * vertPerTree)
+
+    const indicesLength = treeIndex * 9
+    const indices = new Uint32Array(indicesLength)
+
+    let tCount = 0
+    for (let i = 0; i < indicesLength; i++) {
+      const a = tCount
+      const b = tCount + 1
+      const c = tCount + 2
+      const o = tCount + 3
+
+      indices[i++] = a
+      indices[i++] = o
+      indices[i++] = b
+
+      indices[i++] = b
+      indices[i++] = o
+      indices[i++] = c
+
+      indices[i++] = c
+      indices[i++] = o
+      indices[i] = a
+
+      tCount += vertPerTree
+    }
+
+    let vertCount = 0
+    for (let i = 0; i < treeIndex; i += 3) {
+      // A
+      vertices[vertCount++] = this.treeMap[i] - 1.5
+      vertices[vertCount++] = this.treeMap[i + 1] - 0.2
+      vertices[vertCount++] = this.treeMap[i + 2]
+
+      // B
+      vertices[vertCount++] = this.treeMap[i] + 1.5
+      vertices[vertCount++] = this.treeMap[i + 1] - 0.2
+      vertices[vertCount++] = this.treeMap[i + 2]
+
+      // C
+      vertices[vertCount++] = this.treeMap[i]
+      vertices[vertCount++] = this.treeMap[i + 1] - 0.2
+      vertices[vertCount++] = this.treeMap[i + 2] + 3
+
+      // O
+      vertices[vertCount++] = this.treeMap[i]
+      vertices[vertCount++] = this.treeMap[i + 1] + 3.5
+      vertices[vertCount++] = this.treeMap[i + 2] + 1.5
+    }
+
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+    geometry.computeVertexNormals()
+
+    const material = getTreeMaterial()
+
+    let mesh = new THREE.Mesh(geometry, material)
+    // console.log(mesh)
+
+    this.mesh.add(mesh)
+  }
+
   // Update geometry after blending
   public updateGeometryAfterBlend(): void {
     if (!this.mesh || !this.heightMap) return
@@ -828,17 +907,45 @@ export class MapTile {
 
     const positions = positionAttribute.array as Float32Array
 
+    this.treeMap = new Float32Array(positions.length)
+    let treeIndex = 0
+    const min = 3
+    const max = 8
+
+    const noise = new PerlinNoise(98742)
+    const segmentSize = this.config.size / this.config.segments
+
     // Update Y values
     for (let i = 0; i < visibleVertexCount; i++) {
+      const z = this.virtualWorldZ + i * segmentSize
       for (let j = 0; j < visibleVertexCount; j++) {
         const virtualI = i + overlapSegments - 1
         const virtualJ = j + overlapSegments - 1
         const y = this.heightMap[virtualI * virtualVertexCount + virtualJ]
+        const x = this.virtualWorldX + j * segmentSize
 
         const vertexIndex = (i * visibleVertexCount + j) * 3
         positions[vertexIndex + 1] = y
+
+        const noiseValue = noise.fractalNoise2D(
+          x / this.config.noiseScale / 2,
+          z / this.config.noiseScale / 2
+        )
+
+        if (
+          min < y &&
+          y < max &&
+          0.05 < noiseValue &&
+          (virtualI % 2 !== 0 || virtualJ % 2 !== 0)
+        ) {
+          this.treeMap[treeIndex++] = positions[vertexIndex]
+          this.treeMap[treeIndex++] = positions[vertexIndex + 1]
+          this.treeMap[treeIndex++] = positions[vertexIndex + 2]
+        }
       }
     }
+
+    this.createTreeMap(treeIndex)
 
     this.mesh.geometry.computeVertexNormals()
 
@@ -1131,7 +1238,7 @@ export class MapTile {
 
     // Choose material based on cartoon config
     const material = this.config.cartoon.enabled
-      ? getSharedCartoonMaterial(this.config.cartoon.shading)
+      ? getTreeMaterial()
       : getSharedMaterial()
 
     if (this.mesh) {
@@ -1397,9 +1504,7 @@ export class MapTile {
     if (this.isLoaded && this.mesh && this.geometry) {
       // Update material
       if (enabled) {
-        this.mesh.material = getSharedCartoonMaterial(
-          this.config.cartoon.shading
-        )
+        this.mesh.material = getTreeMaterial()
 
         // Create outline mesh if needed
         if (this.config.cartoon.outline.enabled && !this.outlineMesh) {
@@ -1467,7 +1572,7 @@ export class MapTile {
   /**
    * Get current shared cartoon material (for external access)
    */
-  public static getSharedCartoonMaterial(): THREE.ShaderMaterial | null {
+  public static getTreeMaterial(): THREE.MeshStandardMaterial {
     return sharedCartoonMaterial
   }
 
